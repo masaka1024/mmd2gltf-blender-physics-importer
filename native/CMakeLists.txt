@@ -51,8 +51,16 @@ if(NOT MMD_SYNC_RESULT EQUAL 0)
 endif()
 
 # assert 等の __FILE__ にビルド機の絶対パスを埋め込まない (配布するライブラリに個人のパスを残さない)。
-if(NOT MSVC)
+if(MSVC)
+  file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" MMD_NATIVE_SOURCE_DIR)
+  add_compile_options("/d1trimfile:${MMD_NATIVE_SOURCE_DIR}")
+else()
   add_compile_options("-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=native/")
+endif()
+
+# ソースは UTF-8。指定しないと日本語環境の MSVC が CP932 として読み、文字列定数が壊れて C2001 になる。
+if(MSVC)
+  add_compile_options(/utf-8)
 endif()
 
 # --- 浮動小数点: C# エンジンと数値を bit 単位で比べるため、縮約・fast-math を禁止 ---
@@ -73,10 +81,17 @@ mmdphys_fp_flags(mmdphys_core)
 
 # テスト実行ファイルの追加用ヘルパー: mmdphys_add_test(<name> <source.cpp>) -> ctest 名は <name>
 enable_testing()
+# Windows のテスト exe は argv / getenv / ifstream が ANSI (日本語環境は CP932) になるので、マニフェストで UTF-8 にする。
+function(mmdphys_test_utf8 target)
+  if(MSVC)
+    target_sources(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/utf8_acp.manifest")
+  endif()
+endfunction()
 function(mmdphys_add_test name source)
   add_executable(${name} ${source})
   target_link_libraries(${name} PRIVATE mmdphys_core)
   mmdphys_fp_flags(${name})
+  mmdphys_test_utf8(${name})
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
@@ -105,6 +120,7 @@ add_executable(parity_engine tests/parity_engine.cpp)
 target_link_libraries(parity_engine PRIVATE mmdphys_core)
 target_include_directories(parity_engine PRIVATE tests)
 mmdphys_fp_flags(parity_engine)
+mmdphys_test_utf8(parity_engine)
 add_test(NAME parity_engine
   COMMAND "${MMD_BASH}" -c "\"$0\" \"$1\" \"$2\" 300 && \"$3\" \"$1\" 300"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_ref_engine.sh"
@@ -116,6 +132,9 @@ set_tests_properties(parity_engine PROPERTIES
 
 # --- 層 3: FK のビット一致 (C# physbake の --dump-fk と比較) ---
 add_library(mmdnative STATIC src/mmd_glb.cpp src/mmd_fk.cpp src/mmd_bake.cpp)
+if(WIN32)
+  target_sources(mmdnative PRIVATE src/mmd_win_file.cpp)
+endif()
 target_link_libraries(mmdnative PUBLIC mmdphys_core)
 target_include_directories(mmdnative PUBLIC src)
 mmdphys_fp_flags(mmdnative)
@@ -129,11 +148,13 @@ add_executable(parity_fk tests/parity_fk.cpp)
 target_link_libraries(parity_fk PRIVATE mmdnative)
 target_include_directories(parity_fk PRIVATE tests)
 mmdphys_fp_flags(parity_fk)
+mmdphys_test_utf8(parity_fk)
 
 add_executable(parity_bake tests/parity_bake.cpp)
 target_link_libraries(parity_bake PRIVATE mmdnative)
 target_include_directories(parity_bake PRIVATE tests)
 mmdphys_fp_flags(parity_bake)
+mmdphys_test_utf8(parity_bake)
 
 # 基準 CSV (<name>.fk.csv / <name>.bake.csv) は make_ref_bake.sh で build 配下に作る (Task 6 も .bake.csv を使う)。
 function(mmdphys_add_bake_parity tag glb)
@@ -194,6 +215,7 @@ add_executable(test_capi tests/test_capi.cpp)
 target_link_libraries(test_capi PRIVATE mmdphys mmdnative)
 target_include_directories(test_capi PRIVATE include)
 mmdphys_fp_flags(test_capi)
+mmdphys_test_utf8(test_capi)
 add_test(NAME capi COMMAND test_capi)
 set_tests_properties(capi PROPERTIES TIMEOUT 900
   ENVIRONMENT "MMD_TEST_GLB_SMALL=${MMD_TEST_GLB_SMALL};MMD_TEST_GLB_NOEXTRAS=${MMD_TEST_GLB_NOEXTRAS};MMD_TEST_GLB_NOANIM=${MMD_TEST_GLB_NOANIM}")

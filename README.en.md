@@ -52,10 +52,10 @@ The secondary-motion engine is chosen with the **Physics engine** switch in the 
 | | Native engine (default) | Blender Bullet |
 |---|---|---|
 | What computes it | The **same in-house engine as Unity / UE5** (a C++ implementation compatible with Bullet 2.75). Blender's own physics is not used | Blender's built-in rigid-body simulation (Bullet) |
-| Fidelity | The **bake is bit-identical to the C# engine run with the Unity / UE5 playback settings** (measured on macOS arm64 against the C# engine on the same machine; Windows parity is not yet verified) | Close, but not identical |
+| Fidelity | The **bake is bit-identical to the C# engine run with the Unity / UE5 playback settings** (measured on macOS arm64 and on Windows x64, each against the C# engine on the same machine; the Windows x64 library was built with MSVC 14.44 and checked on one PC) | Close, but not identical |
 | Wiring | None (no rigid-body / joint objects are created) | Required (a button builds rigid bodies and joints) |
 | How to use | Bake / real-time display | Play the timeline from the start / bake |
-| Needs | The native library (the current zip bundles macOS arm64; Windows x64 is planned via CI and not built yet) | Nothing |
+| Needs | The native library (the current zip bundles macOS arm64 and Windows x64) | Nothing |
 
 If the native library cannot be loaded (unsupported OS/CPU, missing file, ...), the native engine becomes
 unselectable and the panel shows the reason together with the Blender Bullet UI.
@@ -119,8 +119,8 @@ a perfectly straight leg (the same problem MMD solves with its knee special case
 
 - Blender 4.2 or later (developed on 5.2 LTS) with the bundled glTF importer enabled
 - A `.glb` converted by `mmd2gltf-gui` (or `mmd2gltf-cs`)
-- For the native engine: macOS 11.2 or later (Apple Silicon); the library ships in the zip. Windows (x64) is planned via CI and not bundled yet.
-  Where the library is absent (Intel Mac, Linux, Windows for now) the add-on still installs, shows the reason in the panel and uses Blender Bullet
+- For the native engine: macOS 11.2 or later (Apple Silicon); the library ships in the zip. The Windows (x64) library ships in the zip too (verified on Blender 5.2).
+  Where the library is absent (Intel Mac, Linux, ...) the add-on still installs, shows the reason in the panel and uses Blender Bullet
 - Optional: `toon01.bmp`–`toon10.bmp` from the MMD distribution for shared toons
 
 ## Install
@@ -174,7 +174,7 @@ The native engine is not affected by these (the same engine as Unity / UE5 compu
 
 - **Native engine: physics → non-physics → physics bone chains** are not exact (the middle bone is handled with FK).
 - **Blender 4.2–4.3** (legacy action API path): the native bake is untested there (verified on 5.1 / 5.2).
-- **Windows library** is meant to come from CI and is not built until the repository is published (the current zip is macOS arm64 only).
+- **Windows library** has been verified on one PC only (Windows x64 / MSVC 14.44 / Blender 5.2). Other CPUs and Blender versions are untested.
 - **Blender 5.1's own glTF importer** can crash on some MMD GLBs that carry custom attributes (`_SDEF_*`, `_EDGESCALE`, `_WEIGHTTYPE`). That is an importer bug, not this add-on.
 
 ## Building the native library

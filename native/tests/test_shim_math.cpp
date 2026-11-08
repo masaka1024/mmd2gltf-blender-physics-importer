@@ -9,23 +9,26 @@ static int Failures = 0;
 
 static uint32 Bits(float f) { uint32 b; std::memcpy(&b, &f, 4); return b; }
 static uint64 Bits(double f) { uint64 b; std::memcpy(&b, &f, 8); return b; }
+static float Rt(float v) { volatile float x = v; return x; }
 
 #define EXPECT_BITS(expr, want) do { auto got_ = (expr); auto want_ = (want); if (Bits(got_) != Bits(want_)) { \
 	std::fprintf(stderr, "FAIL line %d: %s -> bits %llx, want %llx\n", __LINE__, #expr, (unsigned long long)Bits(got_), (unsigned long long)Bits(want_)); Failures++; } } while (0)
 
 int main()
 {
+	// ±0 は実行時の値で測る: MSVC の /O2 はインライン展開後に両辺が定数の ±0 だと max/min を畳み込んで逆側を返す
+	// (/Od・/fp:strict・実行時の値では正しい)。エンジンが実行する演算の検査なので Rt() で定数畳み込みを止める。
 	// Max: (B < A) ? A : B  -- 等しい (±0) ときは B
-	EXPECT_BITS(FMath::Max(0.0f, -0.0f), -0.0f);
-	EXPECT_BITS(FMath::Max(-0.0f, 0.0f), 0.0f);
+	EXPECT_BITS(FMath::Max(Rt(0.0f), Rt(-0.0f)), -0.0f);
+	EXPECT_BITS(FMath::Max(Rt(-0.0f), Rt(0.0f)), 0.0f);
 	// Min: (A < B) ? A : B  -- 等しい (±0) ときは B
-	EXPECT_BITS(FMath::Min(0.0f, -0.0f), -0.0f);
-	EXPECT_BITS(FMath::Min(-0.0f, 0.0f), 0.0f);
+	EXPECT_BITS(FMath::Min(Rt(0.0f), Rt(-0.0f)), -0.0f);
+	EXPECT_BITS(FMath::Min(Rt(-0.0f), Rt(0.0f)), 0.0f);
 	EXPECT_BITS(FMath::Max(1.0f, 2.0f), 2.0f);
 	EXPECT_BITS(FMath::Min(1.0f, 2.0f), 1.0f);
 	// Clamp = Max(Min(X,Hi),Lo)
-	EXPECT_BITS(FMath::Clamp(-0.0f, 0.0f, 1.0f), 0.0f);
-	EXPECT_BITS(FMath::Clamp(0.0f, -0.0f, 1.0f), -0.0f);
+	EXPECT_BITS(FMath::Clamp(Rt(-0.0f), Rt(0.0f), 1.0f), 0.0f);
+	EXPECT_BITS(FMath::Clamp(Rt(0.0f), Rt(-0.0f), 1.0f), -0.0f);
 	EXPECT_BITS(FMath::Clamp(5.0f, 0.0f, 1.0f), 1.0f);
 	EXPECT_BITS(FMath::Clamp(-5.0f, -1.0f, 1.0f), -1.0f);
 	// Abs(float/double) は fabsf/fabs なので -0.0 は +0.0 になる

@@ -14,13 +14,7 @@
 #include <vector>
 
 #if defined(_WIN32)
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>
+#  include "mmd_win_file.h"   // <windows.h> は shim の TCHAR と衝突するのでここでは include しない
 #endif
 
 using namespace mmdnative;
@@ -51,11 +45,9 @@ namespace
 	{
 		FILE* fp = nullptr;
 #if defined(_WIN32)
-		const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8Path, -1, nullptr, 0);
-		if (n <= 0) { err = std::string("path is not valid UTF-8: ") + utf8Path; return false; }
-		std::vector<wchar_t> wide(static_cast<size_t>(n));
-		MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8Path, -1, wide.data(), n);
-		fp = _wfopen(wide.data(), L"rb");
+		bool invalidUtf8 = false;
+		fp = OpenFileForReadUtf8(utf8Path, invalidUtf8);
+		if (invalidUtf8) { err = std::string("path is not valid UTF-8: ") + utf8Path; return false; }
 #else
 		fp = std::fopen(utf8Path, "rb");
 #endif
