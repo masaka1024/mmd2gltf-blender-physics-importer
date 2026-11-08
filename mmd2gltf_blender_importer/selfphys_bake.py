@@ -222,6 +222,22 @@ def _write_fcurve(fc, xs, ys):
 # ---------------------------------------------------------------------------
 # 公開関数
 # ---------------------------------------------------------------------------
+def bone_map(arm, model, nb, scale):
+    """PMX index ↔ Blender ボーンの対応。戻り値 ({pmx index: Bone}, {Blender 名: pmx index})。
+
+    find_bone の最近傍フォールバックで 2 つの PMX index が同じ Blender ボーンに
+    なることがある。最初の index だけ採用し、残りは対応無し (= skipped) とする。
+    ベイクとリアルタイム表示で共有する。"""
+    pmx_bone = {}
+    blender_to_pmx = {}
+    for i in range(min(nb, len(model.bones))):
+        b = physics_builder.find_bone(arm, model, i, scale)
+        if b is not None and b.name not in blender_to_pmx:
+            pmx_bone[i] = b
+            blender_to_pmx[b.name] = i
+    return pmx_bone, blender_to_pmx
+
+
 def has_bake(arm):
     ad = arm.animation_data
     return ad is not None and ad.nla_tracks.get(BAKE_TRACK_NAME) is not None
@@ -284,15 +300,7 @@ def bake(context, arm, glb_path, report, progress=None):
     xs = times * fps
 
     # PMX index ↔ Blender ボーン
-    pmx_bone = {}
-    blender_to_pmx = {}
-    for i in range(min(nb, len(model.bones))):
-        b = physics_builder.find_bone(arm, model, i, scale)
-        # find_bone の最近傍フォールバックで 2 つの PMX index が同じ Blender ボーンに
-        # なることがある。最初の index だけ採用し、残りは対応無し (= skipped) とする。
-        if b is not None and b.name not in blender_to_pmx:
-            pmx_bone[i] = b
-            blender_to_pmx[b.name] = i
+    pmx_bone, blender_to_pmx = bone_map(arm, model, nb, scale)
 
     targets = []
     for bi in phys:
