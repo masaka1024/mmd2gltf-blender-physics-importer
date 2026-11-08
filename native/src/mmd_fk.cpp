@@ -10,19 +10,19 @@ namespace mmdnative
 
 	namespace
 	{
-		// 移植元 GltfSkeleton.cs:81-84 (ReadVec3)
+		// 移植元 GltfSkeleton.cs:80-83 (ReadVec3)
 		Vec3 ReadVec3(bool has, const std::vector<float>& a)
 		{
 			return (has && a.size() >= 3) ? Vec3(a[0], a[1], a[2]) : Vec3::Zero;
 		}
-		// 移植元 GltfSkeleton.cs:86-90 (ReadQuat)
+		// 移植元 GltfSkeleton.cs:85-89 (ReadQuat)
 		Quat ReadQuat(bool has, const std::vector<float>& a)
 		{
 			return (has && a.size() >= 4) ? Quat(a[0], a[1], a[2], a[3]) : Quat::Identity;
 		}
 	}
 
-	// 移植元 GltfSkeleton.cs:30-79 (Load)
+	// 移植元 GltfSkeleton.cs:26-78 (Load)
 	bool LoadSkeleton(const GlbFile& glb, Skeleton& sk, std::string& err)
 	{
 		const FMmdJsonArray* nodes = GlbArr(glb, "nodes");
@@ -84,7 +84,7 @@ namespace mmdnative
 		return true;
 	}
 
-	// 移植元 GltfSkeleton.cs:95-109 (TopologicalOrder)。
+	// 移植元 GltfSkeleton.cs:92-108 (TopologicalOrder)。
 	// List.Sort は不安定だが、比較子が (depth, index) の全順序なので結果は一意 = std::sort と同じ。
 	std::vector<int> Skeleton::TopologicalOrder() const
 	{
@@ -102,7 +102,7 @@ namespace mmdnative
 		return idx;
 	}
 
-	// 移植元 GltfAnim.cs:27-37 (Find)
+	// 移植元 GltfAnim.cs:21-33 (Find)
 	int AnimSampler::Find(float t) const
 	{
 		int lo = 0, hi = static_cast<int>(Times.size()) - 1;
@@ -116,7 +116,7 @@ namespace mmdnative
 		return lo;
 	}
 
-	// 移植元 GltfAnim.cs:67-74 (GetSpan)。Math.Min/Max(float) は NaN を伝播する。
+	// 移植元 GltfAnim.cs:53-60 (GetSpan)。Math.Min/Max(float) は NaN を伝播する。
 	void AnimSampler::GetSpan(float t, int& i0, int& i1, float& u) const
 	{
 		i0 = Find(t);
@@ -132,7 +132,7 @@ namespace mmdnative
 		else u = 0.0f;
 	}
 
-	// 移植元 GltfAnim.cs:39-46 (SampleVec3)
+	// 移植元 GltfAnim.cs:35-42 (SampleVec3)
 	Vec3 AnimSampler::SampleVec3(float t) const
 	{
 		int i0, i1; float u;
@@ -143,7 +143,7 @@ namespace mmdnative
 		return a + (b - a) * u;
 	}
 
-	// 移植元 GltfAnim.cs:48-56 (SampleQuat)
+	// 移植元 GltfAnim.cs:44-51 (SampleQuat)
 	Quat AnimSampler::SampleQuat(float t) const
 	{
 		int i0, i1; float u;
@@ -154,7 +154,7 @@ namespace mmdnative
 		return Quat::Slerp(a.Normalized(), b.Normalized(), u);
 	}
 
-	// 移植元 GltfAnim.cs:140-143 (SampleLocal)
+	// 移植元 GltfAnim.cs:137-142 (SampleLocal)
 	void Animation::SampleLocal(int node, float t, const Vec3& restPos, const Quat& restRot, Vec3& outPos, Quat& outRot) const
 	{
 		auto ts = Translation.find(node);
@@ -163,7 +163,7 @@ namespace mmdnative
 		outRot = rs != Rotation.end() ? rs->second->SampleQuat(t) : restRot;
 	}
 
-	// 移植元 GltfAnim.cs:88-134 (Load)
+	// 移植元 GltfAnim.cs:73-133 (GltfAnimation.Load)
 	bool LoadAnimation(const GlbFile& glb, int animIndex, Animation& result, std::string& err)
 	{
 		const FMmdJsonArray* anims = GlbArr(glb, "animations");
@@ -236,7 +236,7 @@ namespace mmdnative
 		return true;
 	}
 
-	// 移植元 MmdConvert.cs:43-44 (GltfToMmdPos float 版) / :47 (GltfToMmdRot) / :49 (GltfToMmd)
+	// 移植元 MmdConvert.cs:46-47 (GltfToMmdPos float 版) / :54 (GltfToMmdRot) / :59-60 (GltfToMmd)
 	RigidTransform GltfToMmd(const Vec3& pos, const Quat& rot, float unitScale)
 	{
 		const Vec3 p(pos.x / unitScale, pos.y / unitScale, -pos.z / unitScale);
@@ -244,7 +244,7 @@ namespace mmdnative
 		return RigidTransform(r, p);
 	}
 
-	// 移植元 PhysBake/Program.cs:~141-160 (FK ループ)
+	// 移植元 PhysBake/Program.cs:188-206 (FK ループ)
 	std::vector<std::vector<RigidTransform>> ComputeFk(const Skeleton& skel, const Animation& anim, float unitScale)
 	{
 		const int nb = skel.BoneCount;
@@ -270,7 +270,7 @@ namespace mmdnative
 		return world;
 	}
 
-	// 移植元 PhysBake/Program.cs:~110-135 (バインド姿勢の検算)
+	// 移植元 PhysBake/Program.cs:163-185 (バインド姿勢の検算)
 	float CheckBindPose(const Skeleton& skel, const PmxPhysicsModel& model, float unitScale)
 	{
 		const int nb = skel.BoneCount;

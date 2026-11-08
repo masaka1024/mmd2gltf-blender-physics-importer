@@ -1,7 +1,14 @@
 #include "mmd_glb.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#if defined(_WIN32)
+#include <locale.h>
+#else
+#include <locale.h>
+#include <xlocale.h>
+#endif
 
 namespace mmdnative
 {
@@ -17,7 +24,7 @@ namespace mmdnative
 		return MiniJson::Get(MiniJson::Obj(node), FString(FUTF8ToTCHAR(key)));
 	}
 
-	// 移植元 Glb.cs:84-87 (Int)。
+	// 移植元 Glb.cs:77-79 (Int)。
 	int JsonInt(const TSharedPtr<MmdJsonValue>& node, const char* key, int fallback)
 	{
 		TSharedPtr<MmdJsonValue> v = JsonGet(node, key);
@@ -31,7 +38,7 @@ namespace mmdnative
 		return v;
 	}
 
-	// 移植元 Glb.cs:42-72
+	// 移植元 Glb.cs:39-67 (Parse)
 	bool LoadGlb(const std::vector<uint8_t>& d, GlbFile& out, std::string& err)
 	{
 		constexpr uint32_t MagicGlb = 0x46546C67, ChunkJson = 0x4E4F534A, ChunkBin = 0x004E4942;
@@ -67,13 +74,13 @@ namespace mmdnative
 		return true;
 	}
 
-	// 移植元 Glb.cs:78-82
+	// 移植元 Glb.cs:72 (Arr)
 	const FMmdJsonArray* GlbArr(const GlbFile& g, const char* key)
 	{
 		return MiniJson::Arr(JsonGet(g.Json, key));
 	}
 
-	// 移植元 Glb.cs:101-142
+	// 移植元 Glb.cs:95-136 (ReadFloatAccessor)
 	bool ReadFloatAccessor(const GlbFile& g, int accessorIndex, std::vector<float>& result, int& components,
 	                       std::string& err)
 	{
@@ -127,6 +134,24 @@ namespace mmdnative
 			for (int c = 0; c < components; c++)
 				std::memcpy(&result[static_cast<size_t>(i) * components + c], g.Bin.data() + o + c * 4, 4);
 		}
+		return true;
+	}
+
+	// "C" ロケールでの strtof (LC_NUMERIC が "C" 以外でも "0.5" を正しく読む)。
+	// トークン全体が数値で、結果が有限であること (System.Text.Json の GetSingle と同じ拒否条件)。
+	static bool ParseFloatC(const std::string& tok, float& out)
+	{
+#if defined(_WIN32)
+		static _locale_t loc = _create_locale(LC_NUMERIC, "C");
+		char* end = nullptr;
+		const float v = _strtof_l(tok.c_str(), &end, loc);
+#else
+		static locale_t loc = newlocale(LC_NUMERIC_MASK, "C", static_cast<locale_t>(0));
+		char* end = nullptr;
+		const float v = strtof_l(tok.c_str(), &end, loc);
+#endif
+		if (end == tok.c_str() || *end != '\0' || !std::isfinite(v)) return false;
+		out = v;
 		return true;
 	}
 
@@ -194,7 +219,10 @@ namespace mmdnative
 					const size_t st = i;
 					while (i < s.size() && (s[i] == '-' || s[i] == '+' || s[i] == '.' || s[i] == 'e' || s[i] == 'E' || (s[i] >= '0' && s[i] <= '9'))) i++;
 					if (st == i) { ok = false; return; }
-					v.push_back(std::strtof(s.substr(st, i - st).c_str(), nullptr));
+					const std::string tok = s.substr(st, i - st);
+					float fv = 0.0f;
+					if (!ParseFloatC(tok, fv)) { ok = false; return; }
+					v.push_back(fv);
 					Ws();
 					if (i < s.size() && s[i] == ',') { i++; continue; }
 					if (i < s.size() && s[i] == ']') { i++; return; }

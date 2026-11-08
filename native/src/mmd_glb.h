@@ -30,13 +30,13 @@ namespace mmdnative
 	};
 	bool ReadNodeFloats(const GlbFile& g, std::vector<NodeFloats>& out, std::string& err);
 
-	// 移植元 Glb.cs:42-72 (Parse)。例外の代わりに false + err。
+	// 移植元 Glb.cs:39-67 (Parse)。例外の代わりに false + err。
 	bool LoadGlb(const std::vector<uint8_t>& bytes, GlbFile& out, std::string& err);
 
-	// 移植元 Glb.cs:78-82 (Arr)。無ければ nullptr。
+	// 移植元 Glb.cs:72 (Arr)。無ければ nullptr。
 	const MmdPhysics::FMmdJsonArray* GlbArr(const GlbFile& g, const char* key);
 
-	// 移植元 Glb.cs:101-142 (ReadFloatAccessor)。FLOAT のみ / 非 sparse。
+	// 移植元 Glb.cs:95-136 (ReadFloatAccessor)。FLOAT のみ / 非 sparse。
 	bool ReadFloatAccessor(const GlbFile& g, int accessorIndex, std::vector<float>& out, int& components,
 	                       std::string& err);
 

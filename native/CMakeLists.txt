@@ -91,6 +91,11 @@ target_link_libraries(mmdnative PUBLIC mmdphys_core)
 target_include_directories(mmdnative PUBLIC src)
 mmdphys_fp_flags(mmdnative)
 
+add_executable(test_fk_json tests/test_fk_json.cpp)
+target_link_libraries(test_fk_json PRIVATE mmdnative)
+mmdphys_fp_flags(test_fk_json)
+add_test(NAME test_fk_json COMMAND test_fk_json)
+
 add_executable(parity_fk tests/parity_fk.cpp)
 target_link_libraries(parity_fk PRIVATE mmdnative)
 target_include_directories(parity_fk PRIVATE tests)
