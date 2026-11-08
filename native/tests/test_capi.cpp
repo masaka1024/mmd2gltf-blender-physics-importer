@@ -173,6 +173,23 @@ int main()
 		CHECK(!nan);
 		CHECK(warn == 0);
 		std::printf("live: 60 steps, warn=%d, sum|phys-input| at f59 = %g\n", warn, moved);
+		// 別名 (in == out) は別バッファと同じ結果
+		{
+			CHECK(mmd_live_reset(h, pack(0).data()) == MMD_OK);
+			std::vector<float> sep((size_t)nb * 7), alias;
+			for (int f = 0; f < 5; f++) CHECK(mmd_live_step(h, pack(f).data(), 1.0f / 60, sep.data()) == MMD_OK);
+			CHECK(mmd_live_reset(h, pack(0).data()) == MMD_OK);
+			for (int f = 0; f < 5; f++)
+			{
+				alias = pack(f);
+				CHECK(mmd_live_step(h, alias.data(), 1.0f / 60, alias.data()) == MMD_OK);
+			}
+			CHECK(std::memcmp(sep.data(), alias.data(), sep.size() * sizeof(float)) == 0);
+		}
+		// reset 失敗 (NULL) の後は step が MMD_ERR
+		CHECK(mmd_live_reset(h, pack(0).data()) == MMD_OK);
+		CHECK(mmd_live_reset(h, nullptr) == MMD_ERR);
+		CHECK(mmd_live_step(h, pack(0).data(), 1.0f / 60, out.data()) == MMD_ERR);
 		// reset し直せる
 		CHECK(mmd_live_reset(h, pack(0).data()) == MMD_OK);
 	}

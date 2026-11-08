@@ -144,7 +144,9 @@ endif()
 set(MMD_NATIVE_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../mmd2gltf_blender_importer/native_lib"
     CACHE PATH "Where cmake --install puts the shared library")
 if(WIN32)
-  install(TARGETS mmdphys RUNTIME DESTINATION "${MMD_NATIVE_LIB_DIR}")
+  # import library (.lib) は native_lib に置かず build ツリー内へ。
+  install(TARGETS mmdphys RUNTIME DESTINATION "${MMD_NATIVE_LIB_DIR}"
+          ARCHIVE DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/install_archive")
 else()
   install(TARGETS mmdphys LIBRARY DESTINATION "${MMD_NATIVE_LIB_DIR}")
 endif()

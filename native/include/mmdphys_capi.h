@@ -41,6 +41,7 @@ MMD_API int32_t     mmd_get_times(MmdHandle*, float* out, int32_t cap_frames);
 MMD_API int32_t     mmd_bake(MmdHandle*, float* out_world, int64_t cap_floats,
                              MmdProgressFn progress, void* user);                           /* [frame][bone][7] */
 MMD_API int32_t     mmd_live_reset(MmdHandle*, const float* bone_world_in);                 /* [bone][7] */
+/* mmd_live_step: bone_world_out は bone_world_in と同じバッファでもよい (別名可)。reset 前 / reset 失敗後は MMD_ERR。 */
 MMD_API int32_t     mmd_live_step(MmdHandle*, const float* bone_world_in, float dt, float* bone_world_out);
 
 #ifdef __cplusplus

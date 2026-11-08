@@ -29,9 +29,22 @@ using namespace MmdPhysics;
 namespace
 {
 	thread_local std::string g_error;
+	// g_error への代入が確保に失敗したとき (bad_alloc 等) に返す静的文字列。
+	thread_local const char* g_errorFallback = nullptr;
 
-	void SetError(const std::string& s) { g_error = s; }
-	void ClearError() { g_error.clear(); }
+	// 例外を出さない。確保に失敗したら静的な文言へ切り替える。
+	void SetError(const std::string& s) noexcept
+	{
+		try { g_error = s; g_errorFallback = nullptr; }
+		catch (...) { g_errorFallback = "out of memory while recording error"; }
+	}
+	// catch ブロック用: 文字列の組み立ても noexcept 内で行う。
+	void SetErrorWhat(const char* prefix, const char* what) noexcept
+	{
+		try { g_error.assign(prefix); g_error.append(what ? what : ""); g_errorFallback = nullptr; }
+		catch (...) { g_errorFallback = "out of memory"; }
+	}
+	void ClearError() noexcept { g_errorFallback = nullptr; g_error.clear(); }
 
 	// UTF-8 パスでファイルを読む (Windows は UTF-8 -> UTF-16 に変換して _wfopen)。
 	bool ReadFileBytes(const char* utf8Path, std::vector<uint8_t>& out, std::string& err)
@@ -99,8 +112,8 @@ namespace
 	int32_t Guard(F&& f)
 	{
 		try { return f(); }
-		catch (const std::exception& e) { SetError(std::string("exception: ") + e.what()); }
-		catch (...) { SetError("unknown exception"); }
+		catch (const std::exception& e) { SetErrorWhat("exception: ", e.what()); }
+		catch (...) { SetErrorWhat("unknown exception", ""); }
 		return MMD_ERR;
 	}
 }
@@ -109,7 +122,7 @@ extern "C"
 {
 MMD_API int32_t mmd_api_version(void) { return MMD_API_VERSION; }
 
-MMD_API const char* mmd_last_error(void) { return g_error.c_str(); }
+MMD_API const char* mmd_last_error(void) { return g_errorFallback ? g_errorFallback : g_error.c_str(); }
 
 MMD_API MmdHandle* mmd_create(const char* utf8_glb_path)
 {
@@ -179,8 +192,8 @@ MMD_API MmdHandle* mmd_create(const char* utf8_glb_path)
 		h->PhysicsBones = CollectPhysicsBones(*b, nb);
 		return h.release();
 	}
-	catch (const std::exception& e) { SetError(std::string("exception: ") + e.what()); }
-	catch (...) { SetError("unknown exception"); }
+	catch (const std::exception& e) { SetErrorWhat("exception: ", e.what()); }
+	catch (...) { SetErrorWhat("unknown exception", ""); }
 	return nullptr;
 }
 
@@ -281,11 +294,12 @@ MMD_API int32_t mmd_live_reset(MmdHandle* h, const float* in)
 	ClearError();
 	return Guard([&]() -> int32_t {
 		if (!CheckHandle(h)) return MMD_ERR;
+		h->Live = TSharedPtr<PmxPhysicsBuilder>();   // 失敗したら「reset が必要」状態に戻る
 		if (!in) { SetError("bone_world_in is null"); return MMD_ERR; }
 		const int nb = h->Sk.BoneCount;
-		h->Live = PmxPhysicsBuilder::Build(TSharedPtr<PmxPhysicsModel>(h->Model));
-		if (!h->Live.IsValid()) { SetError("PmxPhysicsBuilder::Build failed"); return MMD_ERR; }
-		PmxPhysicsBuilder& builder = *h->Live;
+		TSharedPtr<PmxPhysicsBuilder> live = PmxPhysicsBuilder::Build(TSharedPtr<PmxPhysicsModel>(h->Model));
+		if (!live.IsValid()) { SetError("PmxPhysicsBuilder::Build failed"); return MMD_ERR; }
+		PmxPhysicsBuilder& builder = *live;
 		ApplySolverSettings(builder.World, h->Settings);
 		h->NeedAligned = h->Settings.AlignBonePositions ||
 		                 (h->Settings.BoneMergeMode && builder.HasBoneMergeBodies());
@@ -298,6 +312,7 @@ MMD_API int32_t mmd_live_reset(MmdHandle* h, const float* in)
 		builder.ResetBodiesToBonePoseFk(getter);
 		h->LastOut.resize(nb);
 		for (int b = 0; b < nb; b++) h->LastOut[b] = Unpack(in + static_cast<size_t>(b) * 7);
+		h->Live = live;   // 最後に公開
 		return MMD_OK;
 	});
 }
@@ -324,7 +339,7 @@ MMD_API int32_t mmd_live_step(MmdHandle* h, const float* in, float dt, float* ou
 		if (h->NeedAligned)
 			aligned = builder.ComputeAlignedBonePoses(getter, h->Settings.AlignRotClampAlpha, h->Settings.AlignBonePositions);
 
-		std::memcpy(out, in, static_cast<size_t>(nb) * 7 * sizeof(float));
+		std::memmove(out, in, static_cast<size_t>(nb) * 7 * sizeof(float));   // out == in を許す
 		bool nan = false;
 		for (const BoneLink& link : builder.BoneLinks)
 		{
