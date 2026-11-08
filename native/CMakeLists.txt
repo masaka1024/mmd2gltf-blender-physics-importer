@@ -61,3 +61,22 @@ endfunction()
 
 mmdphys_add_test(test_load tests/test_load.cpp)
 mmdphys_add_test(test_shim_math tests/test_shim_math.cpp)
+
+# --- 層 2: エンジン単体のビット一致 (C# 参照エンジンの CSV と比較) ---
+# 基準 CSV は build ディレクトリに作る。テスト GLB は環境変数で渡し、リポジトリには入れない。
+set(MMD_TEST_GLB_SMALL "$ENV{MMD_TEST_GLB_SMALL}" CACHE FILEPATH "Small test GLB (never committed)")
+if(NOT MMD_TEST_GLB_SMALL)
+  set(MMD_TEST_GLB_SMALL "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb")
+endif()
+add_executable(parity_engine tests/parity_engine.cpp)
+target_link_libraries(parity_engine PRIVATE mmdphys_core)
+target_include_directories(parity_engine PRIVATE tests)
+mmdphys_fp_flags(parity_engine)
+add_test(NAME parity_engine
+  COMMAND bash -c "\"$0\" \"$1\" \"$2\" 300 && \"$3\" \"$1\" 300"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_ref_engine.sh"
+          "${CMAKE_CURRENT_BINARY_DIR}/ref/ref_engine.csv"
+          "${MMD_TEST_GLB_SMALL}"
+          "$<TARGET_FILE:parity_engine>")
+set_tests_properties(parity_engine PROPERTIES
+  ENVIRONMENT "MMD_TEST_GLB_SMALL=${MMD_TEST_GLB_SMALL}" TIMEOUT 600)
