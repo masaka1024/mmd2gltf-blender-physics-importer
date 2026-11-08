@@ -81,13 +81,19 @@ def _load():
         if _is_arch_error(e):
             return None, "CPU の種類が違います"
         return None, "ライブラリを読み込めません: %s" % e
+    # 版数を先に見る (将来版は関数の構成が違うことがあるため、bind より前)
     try:
-        _bind(lib)
+        lib.mmd_api_version.restype = ctypes.c_int32
+        lib.mmd_api_version.argtypes = []
         ver = lib.mmd_api_version()
     except AttributeError as e:
         return None, "ライブラリを読み込めません: %s" % e
     if ver != EXPECTED_API_VERSION:
         return None, "版数が違います (lib %d / addon %d)" % (ver, EXPECTED_API_VERSION)
+    try:
+        _bind(lib)
+    except AttributeError as e:
+        return None, "ライブラリを読み込めません: %s" % e
     return lib, ""
 
 
@@ -168,7 +174,7 @@ class NativeModel:
 
     def rest_world(self):
         n = self._bones
-        arr = array("f", bytes(4 * 7 * n))
+        arr = array("f", [0.0]) * (7 * n)
         got = _lib.mmd_get_rest_world(self._handle(), _addr(arr), n)
         if got < 0:
             raise NativeError(_last_error())
@@ -176,7 +182,7 @@ class NativeModel:
 
     def times(self):
         n = self._frames
-        arr = array("f", bytes(4 * n))
+        arr = array("f", [0.0]) * n
         got = _lib.mmd_get_times(self._handle(), _addr(arr), n)
         if got < 0:
             raise NativeError(_last_error())
@@ -186,14 +192,22 @@ class NativeModel:
         """全フレームを焼く。戻り値 (array('f') [frame][bone][7], 警告文 | None)。"""
         h = self._handle()
         n = self._frames * self._bones * 7
-        arr = array("f", bytes(4 * n))
+        arr = array("f", [0.0]) * n
+        err = []
         if progress is not None:
             def _cb(done, total, _user):
-                progress(done, total)
+                if err:
+                    return
+                try:
+                    progress(done, total)
+                except BaseException as e:  # ctypes は例外を握りつぶすので保存して後で投げ直す
+                    err.append(e)
             cb = _PROGRESS_FN(_cb)  # 呼び出し中は参照を保持する
         else:
             cb = ctypes.cast(None, _PROGRESS_FN)
         rc = _lib.mmd_bake(h, _addr(arr), n, cb, None)
+        if err:
+            raise err[0]
         if rc == MMD_ERR:
             raise NativeError(_last_error())
         return arr, (_last_error() if rc == MMD_WARN_NAN else None)
@@ -205,7 +219,7 @@ class NativeModel:
 
     def live_step(self, world_in, dt):
         _check_len(world_in, self._bones * 7, "world_in")
-        out = array("f", bytes(4 * len(world_in)))
+        out = array("f", [0.0]) * len(world_in)
         rc = _lib.mmd_live_step(self._handle(), _addr(world_in), float(dt), _addr(out))
         if rc == MMD_ERR:
             raise NativeError(_last_error())

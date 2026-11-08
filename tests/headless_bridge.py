@@ -50,6 +50,17 @@ def main():
         calls = []
         arr, warn = m.bake(progress=lambda d, t: calls.append((d, t)))
         check("bake", len(arr) == info["frame_count"] * 179 * 7 and len(calls) > 0, [len(arr), warn, len(calls)])
+        # 進捗コールバックの例外は bake 完了後に同じ型で投げ直される
+        n_calls = []
+
+        def bad_cb(d, t):
+            n_calls.append(d)
+            raise KeyError("boom")
+        try:
+            m.bake(progress=bad_cb)
+            check("progress_exc", False, "no raise")
+        except KeyError:
+            check("progress_exc", len(n_calls) == 1, len(n_calls))
         m.close()
         m.close()
         check("close_twice", True)
