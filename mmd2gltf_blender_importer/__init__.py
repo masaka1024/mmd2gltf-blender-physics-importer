@@ -252,6 +252,8 @@ class MMD2GLTF_OT_import(bpy.types.Operator, ImportHelper):
         if not model.has_mmd:
             self.report({"WARNING"}, "extras.mmd が無いため、物理・材質の再構築は行いません。")
             return {"FINISHED"}
+        # 自作エンジンは配線しないので、ここでアニメ全体を再生できる範囲にしておく
+        physics_builder.extend_scene_to_animation(context.scene, arm)
         if self.do_materials:
             st = material_builder.build(context, arm, model, _material_opts(context, s), rep)
             self.report({"INFO"}, f"材質 {st['materials']} 件を変換")

@@ -66,6 +66,9 @@ def main():
         check("import", r == {"FINISHED"})
         arm = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
         check("native_no_wiring", not [o for o in bpy.data.objects if o.get("mmd2gltf_role") in ("rigid", "joint")])
+        # 自作エンジンは配線しないが、再生範囲はアニメ全体に広がること (既定の 250 で先頭に戻らない)
+        act_end = int(arm.animation_data.action.frame_range[1])
+        check("import_extends_frame_end", act_end > 250 and sc.frame_end == act_end, [sc.frame_end, act_end])
         sc.frame_start, sc.frame_end = 1, 30
         base = set(_non_identity(arm))
 
