@@ -59,7 +59,7 @@ template <typename T> struct TNumericLimits : std::numeric_limits<T>
 // FMath: UE 5.8 の式をそのまま写す (出典は UE_5.8/Engine/Source/Runtime/Core 以下)。
 //  GenericPlatformMath.h:944-971  Max(A,B) = (B < A) ? A : B ; Min(A,B) = (A < B) ? A : B  (±0・NaN の符号/結果が違う)
 //  UnrealMathUtility.h:592-595    Clamp(X,Lo,Hi) = Max(Min(X, Hi), Lo)
-//  GenericPlatformMath.h:930-933  Abs(A) = (A < 0) ? -A : A   (float/double 専用の fabs ではない: Abs(-0.0f) は -0.0f のまま)
+//  GenericPlatformMath.h:930-933 (汎用) Abs(A) = (A < 0) ? -A : A。ただし 1346-1355 で float=fabsf / double=fabs に特殊化されている (Abs(-0.0f) = +0.0f)
 //  GenericPlatformMath.h:521-556  Sin/Cos/Sqrt/Atan/Pow = sinf/sin 等。Acos/Asin は引数を [-1,1] に丸めてから呼ぶ
 //  GenericPlatformMath.cpp:78-86  Atan2(double) は X==0 && Y==0 なら 0.0 を返す。float 版は多項式近似なので delete
 //  UnrealMath.cpp:2969-3031       RoundHalfToEven / TruncateToHalfIfClose
@@ -69,7 +69,13 @@ public:
 	template <typename T> static constexpr FORCEINLINE T Max(T A, T B) { return (B < A) ? A : B; }
 	template <typename T> static constexpr FORCEINLINE T Min(T A, T B) { return (A < B) ? A : B; }
 	template <typename T> static constexpr FORCEINLINE T Clamp(const T X, const T MinValue, const T MaxValue) { return Max(Min(X, MaxValue), MinValue); }
-	template <typename T> static constexpr FORCEINLINE T Abs(const T A) { return (A < (T)0) ? (T)-A : A; }
+	// Abs<float>/Abs<double> も明示指定で同じ特殊化に入るよう、テンプレート内で分岐する。
+	template <typename T> static FORCEINLINE T Abs(const T A)
+	{
+		if constexpr (std::is_same_v<T, float>) { return fabsf(A); }
+		else if constexpr (std::is_same_v<T, double>) { return fabs(A); }
+		else { return (A < (T)0) ? (T)-A : A; }
+	}
 
 	static FORCEINLINE float Sqrt(float V) { return sqrtf(V); }
 	static FORCEINLINE double Sqrt(double V) { return sqrt(V); }

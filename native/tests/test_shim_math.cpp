@@ -1,6 +1,6 @@
 // FMath 互換の ±0 / 特殊値の挙動を UE 5.8 の式と突き合わせる (ビットパターンで比較)。
 //   Max(A,B) = (B < A) ? A : B   Min(A,B) = (A < B) ? A : B   Clamp = Max(Min(X,Hi),Lo)
-//   Abs(A) = (A < 0) ? -A : A    Atan2(double): X==0 && Y==0 -> +0.0
+//   Abs(float)=fabsf, Abs(double)=fabs (GenericPlatformMath.h:1346-1355)    Atan2(double): X==0 && Y==0 -> +0.0
 #include "CoreMinimal.h"
 
 #include <cstdio>
@@ -28,10 +28,12 @@ int main()
 	EXPECT_BITS(FMath::Clamp(0.0f, -0.0f, 1.0f), -0.0f);
 	EXPECT_BITS(FMath::Clamp(5.0f, 0.0f, 1.0f), 1.0f);
 	EXPECT_BITS(FMath::Clamp(-5.0f, -1.0f, 1.0f), -1.0f);
-	// Abs: (A < 0) ? -A : A なので -0.0 はそのまま
-	EXPECT_BITS(FMath::Abs(-0.0f), -0.0f);
+	// Abs(float/double) は fabsf/fabs なので -0.0 は +0.0 になる
+	EXPECT_BITS(FMath::Abs(-0.0f), 0.0f);
 	EXPECT_BITS(FMath::Abs(-2.5f), 2.5f);
-	EXPECT_BITS(FMath::Abs(-0.0), -0.0);
+	EXPECT_BITS(FMath::Abs<float>(-0.0f), 0.0f);
+	EXPECT_BITS(FMath::Abs<double>(-0.0), 0.0);
+	EXPECT_BITS(FMath::Abs(-0.0), 0.0);
 	// Atan2(double): 0/0 は +0.0 (素の atan2(-0,-0) は -pi)
 	EXPECT_BITS(FMath::Atan2(0.0, 0.0), 0.0);
 	EXPECT_BITS(FMath::Atan2(-0.0, -0.0), 0.0);
