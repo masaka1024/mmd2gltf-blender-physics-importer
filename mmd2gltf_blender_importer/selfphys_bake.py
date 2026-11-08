@@ -19,6 +19,10 @@
 #   キーの位置: 時刻 t → フレーム t · fps / fps_base。Blender glTF インポーターも
 #   同じ対応 (オフセット無し、t=0 → フレーム 0) であることをテストで確認している。
 #
+#   Blender のアクション API: 4.4+ の階層アクション (slots / layers / channelbag) で
+#   書く。Blender 4.2–4.3 向けの旧 API (Action.fcurves) の分岐も残しているが、
+#   手元に該当版が無いため未検証 (検証済み: 5.1 / 5.2.1)。
+#
 #   書き込み先: 新規アクション BAKE_ACTION_NAME (揺れ物ボーンの location /
 #   rotation_quaternion だけ) を NLA トラック BAKE_TRACK_NAME (最上段, REPLACE) に置く。
 #   注意: Blender はアクティブなアクションを NLA より上で評価する。元のアクションに
@@ -165,7 +169,8 @@ def action_fcurves(action, arm=None):
             slot = _anim_slot(arm)
         if slot is None and arm is not None:
             for s in action.slots:
-                if s.target_id_type == "OBJECT" and arm.name in s.name_display:
+                if s.target_id_type == "OBJECT" and (s.identifier == "OB" + arm.name
+                                                     or s.name_display == arm.name):
                     slot = s
                     break
         if slot is None and len(action.slots) == 1:
@@ -283,9 +288,11 @@ def bake(context, arm, glb_path, report, progress=None):
     blender_to_pmx = {}
     for i in range(min(nb, len(model.bones))):
         b = physics_builder.find_bone(arm, model, i, scale)
-        if b is not None:
+        # find_bone の最近傍フォールバックで 2 つの PMX index が同じ Blender ボーンに
+        # なることがある。最初の index だけ採用し、残りは対応無し (= skipped) とする。
+        if b is not None and b.name not in blender_to_pmx:
             pmx_bone[i] = b
-            blender_to_pmx.setdefault(b.name, i)
+            blender_to_pmx[b.name] = i
 
     targets = []
     for bi in phys:
@@ -326,6 +333,7 @@ def bake(context, arm, glb_path, report, progress=None):
             pose_cache[bi] = m
         return m
 
+    mode_changed = 0
     for bi, b in targets:
         pb = arm.pose.bones.get(b.name)
         if pb is None:
@@ -333,6 +341,7 @@ def bake(context, arm, glb_path, report, progress=None):
             continue
         if pb.rotation_mode != "QUATERNION":
             pb.rotation_mode = "QUATERNION"
+            mode_changed += 1
         pose = pose_of(bi, b)
         rest_inv = _np_mat(b.matrix_local.inverted())
         par = b.parent
@@ -357,6 +366,9 @@ def bake(context, arm, glb_path, report, progress=None):
         for k in range(4):
             _write_fcurve(_new_fcurve(cb, base + "rotation_quaternion", k, grp), xs, q[:, k])
         result["bones"] += 1
+
+    if mode_changed:
+        report("WARNING", f"揺れ物ボーン {mode_changed} 本の回転モードを QUATERNION に変更しました")
 
     # NLA: 最上段に REPLACE のストリップ 1 本
     track = ad.nla_tracks.new()

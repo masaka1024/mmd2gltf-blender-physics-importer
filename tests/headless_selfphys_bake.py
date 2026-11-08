@@ -127,6 +127,79 @@ def main():
                     max_rot = a
                 if (d > POS_TOL or a > ROT_TOL) and worst is None:
                     worst = {"frame_index": i, "bone": name, "pos_err": d, "rot_err": a}
+        # 独立な回転検査: 揺れ物でないボーンは glTF インポーター自身のアクションで動く
+        # (ベイクのコードと無関係)。その評価後の回転と、同じボーンの native 出力に
+        # pmx_world_to_pose_matrix を当てた回転を比べる。式は全ボーン共通なので、
+        # 末端の揺れ物ボーンの回転式もこれで検証される。
+        # 揺れ物ボーンの子孫 (スカート末端など、剛体の無い先端ボーン) は native 出力に物理が
+        # 伝播しないので対象外にし、別途 (合否に使わず) 誤差だけ出す。
+        phys_set = set(phys)
+        phys_names = {physics_builder.find_bone(arm, model, bi, scale).name for bi in phys}
+
+        def under_phys(bone):
+            p = bone.parent
+            while p is not None:
+                if p.name in phys_names:
+                    return True
+                p = p.parent
+            return False
+        drv_bones, tip_bones, seen = [], [], set()
+        for bi in range(nb):
+            if bi in phys_set:
+                continue
+            bone = physics_builder.find_bone(arm, model, bi, scale)
+            if bone is None or bone.name in seen:
+                continue
+            seen.add(bone.name)
+            (tip_bones if under_phys(bone) else drv_bones).append((bi, bone.name))
+        max_tip = 0.0
+        max_drot, dworst = 0.0, None
+        for i in idxs:
+            x = times[i] * fps
+            fi = math.floor(x)
+            sc.frame_set(fi, subframe=x - fi)
+            for bi, name in drv_bones + tip_bones:
+                o = (i * nb + bi) * 7
+                w7 = arr[o:o + 7]
+                got = (mw @ arm.pose.bones[name].matrix).to_quaternion().normalized()
+                exp_rot = (mw @ sb.pmx_world_to_pose_matrix(w7, rest[bi], arm.data.bones[name], scale)
+                           ).to_quaternion().normalized()
+                dq = got.rotation_difference(exp_rot)
+                a = 2.0 * math.asin(min(1.0, math.sqrt(dq.x * dq.x + dq.y * dq.y + dq.z * dq.z)))
+                if (bi, name) in tip_bones:
+                    max_tip = max(max_tip, a)
+                    continue
+                if a > max_drot:
+                    max_drot = a
+                    dworst = {"frame_index": i, "bone": name, "rot_err": a}
+        check("driven_rot_independent", len(drv_bones) > 0 and max_drot < ROT_TOL,
+              {"max": max_drot, "bones": len(drv_bones), "worst": dworst})
+        res["info_tips_under_physics"] = {"bones": len(tip_bones), "max_rot_err": max_tip,
+                                          "has_physics_descendant": any(
+                                              any(c.name in phys_names for c in arm.data.bones[n].children_recursive)
+                                              for _, n in tip_bones)}
+
+        # 静止姿勢 (world7 == rest7) → matrix_basis の回転は単位
+        from mathutils import Matrix
+        max_id = 0.0
+        all_map = {}
+        for bi in range(nb):
+            bone = physics_builder.find_bone(arm, model, bi, scale)
+            if bone is not None:
+                all_map.setdefault(bone.name, bi)
+        for name, bi in all_map.items():
+            bone = arm.data.bones[name]
+            pose = sb.pmx_world_to_pose_matrix(rest[bi], rest[bi], bone, scale)
+            par = bone.parent
+            if par is not None and par.name in all_map:
+                pp = sb.pmx_world_to_pose_matrix(rest[all_map[par.name]], rest[all_map[par.name]], par, scale)
+                basis = bone.matrix_local.inverted() @ par.matrix_local @ pp.inverted() @ pose
+            else:
+                basis = bone.matrix_local.inverted() @ pose
+            err = max(abs(basis.to_3x3()[r][c] - (1.0 if r == c else 0.0)) for r in range(3) for c in range(3))
+            max_id = max(max_id, err)
+        check("rest_pose_identity", max_id < 1e-5, {"max": max_id, "bones": len(all_map)})
+
         check("layer5_pos", max_pos < POS_TOL, {"max": max_pos, "frames": len(idxs), "bones": len(bones)})
         check("layer5_rot", max_rot < ROT_TOL, {"max": max_rot, "worst": worst})
 
