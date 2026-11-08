@@ -52,10 +52,10 @@ The secondary-motion engine is chosen with the **Physics engine** switch in the 
 | | Native engine (default) | Blender Bullet |
 |---|---|---|
 | What computes it | The **same in-house engine as Unity / UE5** (a C++ implementation compatible with Bullet 2.75). Blender's own physics is not used | Blender's built-in rigid-body simulation (Bullet) |
-| Fidelity | The **bake is bit-identical to the C# engine run with the Unity / UE5 playback settings** | Close, but not identical |
+| Fidelity | The **bake is bit-identical to the C# engine run with the Unity / UE5 playback settings** (measured on macOS arm64 against the C# engine on the same machine; Windows parity is not yet verified) | Close, but not identical |
 | Wiring | None (no rigid-body / joint objects are created) | Required (a button builds rigid bodies and joints) |
 | How to use | Bake / real-time display | Play the timeline from the start / bake |
-| Needs | The native library (bundled in the zip; macOS arm64 / Windows x64) | Nothing |
+| Needs | The native library (the current zip bundles macOS arm64; Windows x64 is planned via CI and not built yet) | Nothing |
 
 If the native library cannot be loaded (unsupported OS/CPU, missing file, ...), the native engine becomes
 unselectable and the panel shows the reason together with the Blender Bullet UI.
@@ -115,7 +115,7 @@ a perfectly straight leg (the same problem MMD solves with its knee special case
 
 - Blender 4.2 or later (developed on 5.2 LTS) with the bundled glTF importer enabled
 - A `.glb` converted by `mmd2gltf-gui` (or `mmd2gltf-cs`)
-- For the native engine: macOS (Apple Silicon) or Windows (x64); the library ships in the zip
+- For the native engine: macOS (Apple Silicon); the library ships in the zip. Windows (x64) is planned via CI and not bundled yet
 - Optional: `toon01.bmp`–`toon10.bmp` from the MMD distribution for shared toons
 
 ## Install
@@ -123,7 +123,7 @@ a perfectly straight leg (the same problem MMD solves with its knee special case
 Build a zip with `tools/build_zip.sh` and install it from *Edit > Preferences > Extensions > Install from Disk*.
 
 **macOS note**: the native library (`native_lib/libmmdphys.dylib`) is ad-hoc signed and not notarized. Installing through
-Blender's *Install from Disk* works (verified). But if you extract a browser-downloaded zip with Finder and copy the
+Blender's *Install from Disk* is fine: extraction the way Blender does it leaves no quarantine attribute (verified by simulating with Python zipfile; GUI install not yet tried). But if you extract a browser-downloaded zip with Finder and copy the
 resulting **folder** into the extensions folder by hand, the quarantine attribute can remain and the library fails to load.
 The panel shows the reason; run `xattr -d com.apple.quarantine <path to libmmdphys.dylib>` in a terminal.
 
