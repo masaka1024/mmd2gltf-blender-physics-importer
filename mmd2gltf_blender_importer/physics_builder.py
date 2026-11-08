@@ -273,6 +273,21 @@ def _bone_pose_delta(arm, bone, scene, frame):
     return w_pose @ w_rest.inverted()
 
 
+def extend_scene_to_animation(scene, arm):
+    """シーンの終了フレームを、アーマチュアとシェイプキーのアクションの長さまで広げる (縮めない)。"""
+    end = scene.frame_end
+    ad = arm.animation_data
+    if ad is not None and ad.action is not None:
+        end = max(end, int(ad.action.frame_range[1]))
+    for o in bpy.data.objects:
+        if o.type == "MESH" and o.animation_data is None and o.data.shape_keys is not None:
+            sk_ad = o.data.shape_keys.animation_data
+            if sk_ad is not None and sk_ad.action is not None:
+                end = max(end, int(sk_ad.action.frame_range[1]))
+    if end > scene.frame_end:
+        scene.frame_end = end
+
+
 def build(context, arm, model, opts: PhysicsOptions, report=None):
     """物理を配線する。戻り値は統計 dict。"""
     scene = context.scene
@@ -292,17 +307,7 @@ def build(context, arm, model, opts: PhysicsOptions, report=None):
     rbw.solver_iterations = opts.solver_iterations
     rbw.use_split_impulse = True          # 初期めり込みの弾き出しを弱める
     # キャッシュ範囲: シーン範囲とアーマチュアのアクション長の大きい方まで
-    end = scene.frame_end
-    ad = arm.animation_data
-    if ad is not None and ad.action is not None:
-        end = max(end, int(ad.action.frame_range[1]))
-    for o in bpy.data.objects:
-        if o.type == "MESH" and o.animation_data is None and o.data.shape_keys is not None:
-            sk_ad = o.data.shape_keys.animation_data
-            if sk_ad is not None and sk_ad.action is not None:
-                end = max(end, int(sk_ad.action.frame_range[1]))
-    if end > scene.frame_end:
-        scene.frame_end = end
+    extend_scene_to_animation(scene, arm)
     if rbw.point_cache is not None:
         rbw.point_cache.frame_start = scene.frame_start
         rbw.point_cache.frame_end = scene.frame_end
