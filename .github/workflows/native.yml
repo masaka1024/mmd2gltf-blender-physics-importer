@@ -1,0 +1,157 @@
+name: native
+
+on:
+  push:
+    branches: [main, feat/native-physics]
+    paths: ['native/**', '.github/workflows/native.yml']
+  pull_request:
+    paths: ['native/**', '.github/workflows/native.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    defaults:
+      run:
+        shell: bash   # Windows でも Git Bash (native/tests/*.sh が bash 前提)
+    env:
+      DOTNET_ROLL_FORWARD: Major
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      # 姉妹リポが private の間は repo scope の PAT をこのシークレットに入れる。public なら未設定でよい
+      # (空だと github.token にフォールバックするが、それは別リポには効かない)。
+      SIBLING_TOKEN: ${{ secrets.SIBLING_REPO_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: importer
+
+      # sync_check.py の取り込み元 + CsReference (層 2) を含む UE5 プラグインリポ
+      - uses: actions/checkout@v4
+        with:
+          repository: masaka1024/mmd2gltf-ue5-physics-importer
+          token: ${{ env.SIBLING_TOKEN }}
+          path: ue5
+
+      # 層 2 の参照エンジン: UE5 リポの .upstream/unity に 74fcc16 を置く (make_ref_engine.sh の前提)
+      - uses: actions/checkout@v4
+        with:
+          repository: masaka1024/mmd2gltf-unity-physics-importer
+          ref: 74fcc16
+          token: ${{ env.SIBLING_TOKEN }}
+          path: ue5/.upstream/unity
+
+      # 層 3/4 の参照: physbake (サブモジュール external/mmd-physics を含む)
+      - uses: actions/checkout@v4
+        with:
+          repository: masaka1024/mmd2gltf-cs
+          ref: feat/physbake-playback
+          submodules: recursive
+          token: ${{ env.SIBLING_TOKEN }}
+          path: cs
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Prepare paths
+        run: |
+          # 参照リポ/テスト GLB の置き場を後続ステップへ渡す (shell: bash なので Git Bash の bash が ctest 内の bash -c にも使われる)
+          W="$(cd "$GITHUB_WORKSPACE" && pwd)"
+          echo "MMD_UE5_REPO=$W/ue5" >> "$GITHUB_ENV"
+          echo "MMD_CS_REPO=$W/cs" >> "$GITHUB_ENV"
+          echo "TESTGLB=$W/testglb" >> "$GITHUB_ENV"
+          mkdir -p "$W/testglb"
+
+      # テスト GLB は絶対にコミットしない。シークレットの URL からだけ取る。
+      - name: Download test GLBs
+        id: glb
+        env:
+          URL_BIG: ${{ secrets.MMD_TEST_GLB_URL }}
+          URL_SMALL: ${{ secrets.MMD_TEST_GLB_SMALL_URL }}
+          URL_NOEXTRAS: ${{ secrets.MMD_TEST_GLB_NOEXTRAS_URL }}
+          URL_NOANIM: ${{ secrets.MMD_TEST_GLB_NOANIM_URL }}
+        run: |
+          set -u
+          fetch() { # <url> <dest>; 成功なら 0
+            [ -n "$1" ] || return 1
+            curl -fsSL --retry 3 -o "$2" "$1" || { echo "::warning::download failed: $2"; rm -f "$2"; return 1; }
+          }
+          have_big=0; have_small=0; have_capi=0
+          fetch "$URL_BIG" "$TESTGLB/big.glb" && have_big=1
+          fetch "$URL_SMALL" "$TESTGLB/small.glb" && have_small=1
+          if [ "$have_small" = 1 ] && fetch "$URL_NOEXTRAS" "$TESTGLB/noextras.glb" \
+             && fetch "$URL_NOANIM" "$TESTGLB/noanim.glb"; then have_capi=1; fi
+          echo "have_big=$have_big"     >> "$GITHUB_OUTPUT"
+          echo "have_small=$have_small" >> "$GITHUB_OUTPUT"
+          echo "have_capi=$have_capi"   >> "$GITHUB_OUTPUT"
+          # CMakeLists は環境変数を初回 configure でキャッシュに取り込む。
+          # (取れなかった GLB は未設定にし、ctest -E で除外する)
+          [ "$have_big" = 1 ]   && echo "MMD_TEST_GLB=$TESTGLB/big.glb" >> "$GITHUB_ENV"
+          [ "$have_small" = 1 ] && echo "MMD_TEST_GLB_SMALL=$TESTGLB/small.glb" >> "$GITHUB_ENV"
+          if [ "$have_capi" = 1 ]; then
+            echo "MMD_TEST_GLB_NOEXTRAS=$TESTGLB/noextras.glb" >> "$GITHUB_ENV"
+            echo "MMD_TEST_GLB_NOANIM=$TESTGLB/noanim.glb" >> "$GITHUB_ENV"
+          fi
+          exit 0
+
+      - name: Configure
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then GEN=(-A x64); else GEN=(); fi
+          cmake -S importer/native -B importer/native/build "${GEN[@]}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMMD_UE5_CORE_DIR="$MMD_UE5_REPO/Plugins/MmdPhysicsImporter/Source/MmdPhysicsCore"
+
+      - name: Build
+        run: cmake --build importer/native/build --config Release --parallel
+
+      - name: Test
+        env:
+          HAVE_BIG: ${{ steps.glb.outputs.have_big }}
+          HAVE_SMALL: ${{ steps.glb.outputs.have_small }}
+          HAVE_CAPI: ${{ steps.glb.outputs.have_capi }}
+        run: |
+          # GLB が無いものは除外し、何を飛ばしたかを明示する (シェル/同期/shim テストは常に走る)。
+          EX=()
+          if [ "$HAVE_SMALL" != 1 ]; then
+            echo "::warning::MMD_TEST_GLB_SMALL_URL not available: skipping parity_engine, *_small, capi"
+            EX+=('parity_engine' '_small$' '^capi$')
+          fi
+          if [ "$HAVE_BIG" != 1 ]; then
+            echo "::warning::MMD_TEST_GLB_URL not available: skipping *_big"
+            EX+=('_big$')
+          fi
+          if [ "$HAVE_CAPI" != 1 ] && [ "$HAVE_SMALL" = 1 ]; then
+            echo "::warning::NOEXTRAS/NOANIM GLB secrets not available: skipping capi"
+            EX+=('^capi$')
+          fi
+          args=(--test-dir importer/native/build -C Release --output-on-failure)
+          if [ ${#EX[@]} -gt 0 ]; then
+            RE="$(IFS='|'; echo "${EX[*]}")"
+            args+=(-E "$RE")
+          fi
+          ctest "${args[@]}"
+
+      - name: Locate library
+        id: lib
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then f=mmdphys.dll; else f=libmmdphys.dylib; fi
+          p="$(find importer/native/build -name "$f" -type f | head -n1)"
+          test -n "$p"
+          echo "path=$p" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mmdphys-${{ matrix.os }}
+          path: ${{ steps.lib.outputs.path }}
+          if-no-files-found: error
