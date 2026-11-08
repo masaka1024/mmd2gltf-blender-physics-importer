@@ -22,6 +22,16 @@ set(MMD_UE5_CORE_DIR
     "${CMAKE_SOURCE_DIR}/../../mmd2gltf-ue5-physics-importer/Plugins/MmdPhysicsImporter/Source/MmdPhysicsCore"
     CACHE PATH "UE5 plugin MmdPhysicsCore directory (for the vendor sync check)")
 
+# スクリプトは bash で走らせる。Windows では PATH 上の bash が WSL ランチャ (System32) になりがちなので Git Bash を直接探す。
+if(WIN32)
+  find_program(MMD_BASH bash HINTS "$ENV{ProgramFiles}/Git/bin" "C:/Program Files/Git/bin" NO_DEFAULT_PATH)
+else()
+  find_program(MMD_BASH bash)
+endif()
+if(NOT MMD_BASH)
+  message(FATAL_ERROR "bash not found (Windows: install Git for Windows)")
+endif()
+
 set(MMD_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/MmdPhysicsCore")
 
 # --- 同期検査: vendor が取り込み元とずれていたら configure を止める ---
@@ -76,7 +86,7 @@ target_link_libraries(parity_engine PRIVATE mmdphys_core)
 target_include_directories(parity_engine PRIVATE tests)
 mmdphys_fp_flags(parity_engine)
 add_test(NAME parity_engine
-  COMMAND bash -c "\"$0\" \"$1\" \"$2\" 300 && \"$3\" \"$1\" 300"
+  COMMAND "${MMD_BASH}" -c "\"$0\" \"$1\" \"$2\" 300 && \"$3\" \"$1\" 300"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_ref_engine.sh"
           "${CMAKE_CURRENT_BINARY_DIR}/ref/ref_engine.csv"
           "${MMD_TEST_GLB_SMALL}"
@@ -113,7 +123,7 @@ mmdphys_fp_flags(parity_bake)
 function(mmdphys_add_bake_parity tag glb)
   set(prefix "${CMAKE_CURRENT_BINARY_DIR}/ref/${tag}")
   add_test(NAME ref_bake_${tag}
-    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_ref_bake.sh" "${glb}" "${prefix}")
+    COMMAND "${MMD_BASH}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_ref_bake.sh" "${glb}" "${prefix}")
   set_tests_properties(ref_bake_${tag} PROPERTIES
     FIXTURES_SETUP ref_bake_${tag} RESOURCE_LOCK physbake_build TIMEOUT 900)
   add_test(NAME parity_fk_${tag} COMMAND parity_fk "${glb}" "${prefix}.fk.csv")

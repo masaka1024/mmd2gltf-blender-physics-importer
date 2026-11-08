@@ -9,6 +9,8 @@ FRAMES="${3:-300}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UE5="${MMD_UE5_REPO:-$HERE/../../../mmd2gltf-ue5-physics-importer}"
 UE5="$(cd "$UE5" && pwd)"
+# Git Bash (msys) の /d/a/... を dotnet が読める C:/... 形式へ (macOS/Linux では何もしない)
+if command -v cygpath >/dev/null 2>&1; then UE5="$(cygpath -m "$UE5")"; fi
 PIN=74fcc16
 
 if [ "$(git -C "$UE5/.upstream/unity" rev-parse --short=7 HEAD 2>/dev/null || true)" != "$PIN" ]; then

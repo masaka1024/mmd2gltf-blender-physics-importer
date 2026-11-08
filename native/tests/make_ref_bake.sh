@@ -19,6 +19,7 @@ OUTDIR="$(dirname "$PREFIX")"
 mkdir -p "$OUTDIR"
 WORK="$(cd "$OUTDIR" && pwd)/csref_physbake"
 mkdir -p "$WORK"
+if command -v cygpath >/dev/null 2>&1; then WORK="$(cygpath -m "$WORK")"; fi
 export DOTNET_ROLL_FORWARD=Major DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 # 同じディレクトリに並列で呼ばれてもビルドが衝突しないようにロックする。

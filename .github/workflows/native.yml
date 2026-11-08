@@ -26,6 +26,9 @@ jobs:
       # (空だと github.token にフォールバックするが、それは別リポには効かない)。
       SIBLING_TOKEN: ${{ secrets.SIBLING_REPO_TOKEN || github.token }}
     steps:
+      # 姉妹リポのスクリプトも LF のまま取得する (Windows の CRLF 変換で bash が壊れるのを防ぐ)
+      - run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
         with:
           path: importer
@@ -41,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: masaka1024/mmd2gltf-unity-physics-importer
-          ref: 74fcc16
+          ref: 74fcc164eb3ad31296668f16ebf0d8e1591f7853
           token: ${{ env.SIBLING_TOKEN }}
           path: ue5/.upstream/unity
 
@@ -67,7 +70,7 @@ jobs:
       - name: Prepare paths
         run: |
           # 参照リポ/テスト GLB の置き場を後続ステップへ渡す (shell: bash なので Git Bash の bash が ctest 内の bash -c にも使われる)
-          W="$(cd "$GITHUB_WORKSPACE" && pwd)"
+          if [ "$RUNNER_OS" = Windows ]; then W="$(cygpath -m "$GITHUB_WORKSPACE")"; else W="$GITHUB_WORKSPACE"; fi
           echo "MMD_UE5_REPO=$W/ue5" >> "$GITHUB_ENV"
           echo "MMD_CS_REPO=$W/cs" >> "$GITHUB_ENV"
           echo "TESTGLB=$W/testglb" >> "$GITHUB_ENV"
@@ -146,8 +149,8 @@ jobs:
         id: lib
         run: |
           if [ "$RUNNER_OS" = Windows ]; then f=mmdphys.dll; else f=libmmdphys.dylib; fi
-          p="$(find importer/native/build -name "$f" -type f | head -n1)"
-          test -n "$p"
+          if [ "$RUNNER_OS" = Windows ]; then p=importer/native/build/Release/mmdphys.dll; else p=importer/native/build/libmmdphys.dylib; fi
+          test -f "$p"
           echo "path=$p" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
