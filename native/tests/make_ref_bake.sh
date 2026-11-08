@@ -16,7 +16,7 @@ if [ ! -d "$CS" ]; then
   echo "error: mmd2gltf-cs が見つかりません: $CS (環境変数 MMD_CS_REPO で場所を指定してください)" >&2
   exit 1
 fi
-# physbake に --playback / --dump-bake が入った版 (mmd2gltf-cs main, b317816 以降) が必要。
+# physbake に --playback / --dump-bake が入った版 (mmd2gltf-cs PR #10 以降の main) が必要。
 # ブランチ名ではなく機能の有無で判定する。
 if ! grep -q -- '--dump-bake' "$CS/src/Mmd2Gltf.PhysBake/Program.cs"; then
   echo "error: $CS の physbake に --dump-bake がありません (mmd2gltf-cs を最新の main にしてください)" >&2

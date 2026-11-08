@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: masaka1024/mmd2gltf-cs
-          ref: main  # --playback / --dump-bake 入りの physbake (b317816 以降) が必要
+          ref: main  # --playback / --dump-bake 入りの physbake (mmd2gltf-cs PR #10 以降) が必要
           submodules: recursive
           token: ${{ env.SIBLING_TOKEN }}
           path: cs
