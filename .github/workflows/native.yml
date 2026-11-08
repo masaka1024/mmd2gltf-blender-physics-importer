@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14]
+        os: [windows-latest, macos-15]   # macos-14 は GitHub 側で廃止済み (ジョブが開始前に cancelled になる)
     defaults:
       run:
         shell: bash   # Windows でも Git Bash (native/tests/*.sh が bash 前提)
