@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cmath>
+#include <math.h>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -47,6 +48,7 @@ using TCHAR = char16_t;
 template <typename T> inline typename std::remove_reference<T>::type&& MoveTemp(T&& Obj) noexcept { return static_cast<typename std::remove_reference<T>::type&&>(Obj); }
 template <typename T> inline void Swap(T& A, T& B) { T Tmp(MoveTemp(A)); A = MoveTemp(B); B = MoveTemp(Tmp); }
 
+// UE Math/NumericLimits.h:28-29,248-266: MIN_flt 1.175494351e-38F, MAX_flt 3.402823466e+38F (= std 値), Lowest = -Max。
 template <typename T> struct TNumericLimits : std::numeric_limits<T>
 {
 	static constexpr T Max() noexcept { return std::numeric_limits<T>::max(); }
@@ -54,41 +56,75 @@ template <typename T> struct TNumericLimits : std::numeric_limits<T>
 	static constexpr T Lowest() noexcept { return std::numeric_limits<T>::lowest(); }
 };
 
-// FMath: 標準ライブラリの同名関数を直接呼ぶ。UE の定義が素の std 呼びと違う所だけ UE に合わせる:
-//  * Max/Min : Max(A,B) = (A >= B) ? A : B,  Min(A,B) = (A <= B) ? A : B  (NaN・符号付きゼロの挙動が std::max/min と違う)
-//  * Clamp   : X < Min ? Min : X < Max ? X : Max
-//  * Acos/Asin : UE は引数を [-1,1] に丸めてから acos/asin を呼ぶ
-//  * Abs(float/double) : fabs 系
-//  * Atan2(float,float) : UE は多項式近似を使うので、ここでは delete して誤用を防ぐ (double 版は std::atan2)
+// FMath: UE 5.8 の式をそのまま写す (出典は UE_5.8/Engine/Source/Runtime/Core 以下)。
+//  GenericPlatformMath.h:944-971  Max(A,B) = (B < A) ? A : B ; Min(A,B) = (A < B) ? A : B  (±0・NaN の符号/結果が違う)
+//  UnrealMathUtility.h:592-595    Clamp(X,Lo,Hi) = Max(Min(X, Hi), Lo)
+//  GenericPlatformMath.h:930-933  Abs(A) = (A < 0) ? -A : A   (float/double 専用の fabs ではない: Abs(-0.0f) は -0.0f のまま)
+//  GenericPlatformMath.h:521-556  Sin/Cos/Sqrt/Atan/Pow = sinf/sin 等。Acos/Asin は引数を [-1,1] に丸めてから呼ぶ
+//  GenericPlatformMath.cpp:78-86  Atan2(double) は X==0 && Y==0 なら 0.0 を返す。float 版は多項式近似なので delete
+//  UnrealMath.cpp:2969-3031       RoundHalfToEven / TruncateToHalfIfClose
 class FMath
 {
 public:
-	template <typename T> static constexpr FORCEINLINE T Max(const T A, const T B) { return (A >= B) ? A : B; }
-	template <typename T> static constexpr FORCEINLINE T Min(const T A, const T B) { return (A <= B) ? A : B; }
-	template <typename T> static constexpr FORCEINLINE T Clamp(const T X, const T Min_, const T Max_) { return X < Min_ ? Min_ : X < Max_ ? X : Max_; }
-	template <typename T> static constexpr FORCEINLINE T Abs(const T A) { return (A >= static_cast<T>(0)) ? A : -A; }
-	static FORCEINLINE float Abs(const float A) { return std::fabs(A); }
-	static FORCEINLINE double Abs(const double A) { return std::fabs(A); }
+	template <typename T> static constexpr FORCEINLINE T Max(T A, T B) { return (B < A) ? A : B; }
+	template <typename T> static constexpr FORCEINLINE T Min(T A, T B) { return (A < B) ? A : B; }
+	template <typename T> static constexpr FORCEINLINE T Clamp(const T X, const T MinValue, const T MaxValue) { return Max(Min(X, MaxValue), MinValue); }
+	template <typename T> static constexpr FORCEINLINE T Abs(const T A) { return (A < (T)0) ? (T)-A : A; }
 
-	static FORCEINLINE float Sqrt(float V) { return std::sqrt(V); }
-	static FORCEINLINE double Sqrt(double V) { return std::sqrt(V); }
-	static FORCEINLINE float Sin(float V) { return std::sin(V); }
-	static FORCEINLINE double Sin(double V) { return std::sin(V); }
-	static FORCEINLINE float Cos(float V) { return std::cos(V); }
-	static FORCEINLINE double Cos(double V) { return std::cos(V); }
-	static FORCEINLINE float Atan(float V) { return std::atan(V); }
-	static FORCEINLINE double Atan(double V) { return std::atan(V); }
-	static FORCEINLINE double Atan2(double Y, double X) { return std::atan2(Y, X); }
+	static FORCEINLINE float Sqrt(float V) { return sqrtf(V); }
+	static FORCEINLINE double Sqrt(double V) { return sqrt(V); }
+	static FORCEINLINE float Sin(float V) { return sinf(V); }
+	static FORCEINLINE double Sin(double V) { return sin(V); }
+	static FORCEINLINE float Cos(float V) { return cosf(V); }
+	static FORCEINLINE double Cos(double V) { return cos(V); }
+	static FORCEINLINE float Atan(float V) { return atanf(V); }
+	static FORCEINLINE double Atan(double V) { return atan(V); }
+	static FORCEINLINE double Atan2(double Y, double X)
+	{
+		if (X == 0.0 && Y == 0.0) { return 0.0; }
+		return atan2(Y, X);
+	}
 	static float Atan2(float Y, float X) = delete;
-	static FORCEINLINE float Acos(float V) { return std::acos((V < -1.f) ? -1.f : ((V < 1.f) ? V : 1.f)); }
-	static FORCEINLINE double Acos(double V) { return std::acos((V < -1.0) ? -1.0 : ((V < 1.0) ? V : 1.0)); }
-	static FORCEINLINE float Asin(float V) { return std::asin((V < -1.f) ? -1.f : ((V < 1.f) ? V : 1.f)); }
-	static FORCEINLINE double Asin(double V) { return std::asin((V < -1.0) ? -1.0 : ((V < 1.0) ? V : 1.0)); }
-	static FORCEINLINE float Pow(float A, float B) { return std::pow(A, B); }
-	static FORCEINLINE double Pow(double A, double B) { return std::pow(A, B); }
-	// 既定の丸めモード (最近接偶数) の nearbyint = 偶数丸め。
-	static FORCEINLINE float RoundHalfToEven(float F) { return std::nearbyint(F); }
-	static FORCEINLINE double RoundHalfToEven(double F) { return std::nearbyint(F); }
+	static FORCEINLINE float Acos(float V) { return acosf((V < -1.f) ? -1.f : ((V < 1.f) ? V : 1.f)); }
+	static FORCEINLINE double Acos(double V) { return acos((V < -1.0) ? -1.0 : ((V < 1.0) ? V : 1.0)); }
+	static FORCEINLINE float Asin(float V) { return asinf((V < -1.f) ? -1.f : ((V < 1.f) ? V : 1.f)); }
+	static FORCEINLINE double Asin(double V) { return asin((V < -1.0) ? -1.0 : ((V < 1.0) ? V : 1.0)); }
+	static FORCEINLINE float Pow(float A, float B) { return powf(A, B); }
+	static FORCEINLINE double Pow(double A, double B) { return pow(A, B); }
+
+	// UnrealMath.cpp:2969-3031 (UE_SMALL_NUMBER = 1.e-8f は double 版の既定引数にも float のまま渡る)
+	static FORCEINLINE float Modf(const float V, float* Int) { return modff(V, Int); }
+	static FORCEINLINE double Modf(const double V, double* Int) { return modf(V, Int); }
+	static FORCEINLINE float TruncateToHalfIfClose(float F, float Tolerance = 1.e-8f)
+	{
+		float I = 0.0f;
+		float Fr = Modf(F, &I);
+		if (F < 0.0f) { return I + ((Abs<float>(Fr - -0.5f) <= Tolerance) ? -0.5f : Fr); }
+		else { return I + ((Abs<float>(Fr - 0.5f) <= Tolerance) ? 0.5f : Fr); }
+	}
+	static FORCEINLINE double TruncateToHalfIfClose(double F, double Tolerance = 1.e-8f)
+	{
+		double I = 0.0;
+		double Fr = Modf(F, &I);
+		if (F < 0.0) { return I + ((Abs<double>(Fr - -0.5) <= Tolerance) ? -0.5 : Fr); }
+		else { return I + ((Abs<double>(Fr - 0.5) <= Tolerance) ? 0.5 : Fr); }
+	}
+	static float RoundHalfToEven(float F)
+	{
+		F = TruncateToHalfIfClose(F);
+		const bool bIsNegative = F < 0.0f;
+		const bool bValueIsEven = static_cast<uint32>(floorf(((bIsNegative) ? -F : F))) % 2 == 0;
+		if (bValueIsEven) { return (bIsNegative) ? floorf(F + 0.5f) : ceilf(F - 0.5f); }
+		else { return (bIsNegative) ? ceilf(F - 0.5f) : floorf(F + 0.5f); }
+	}
+	static double RoundHalfToEven(double F)
+	{
+		F = TruncateToHalfIfClose(F);
+		const bool bIsNegative = F < 0.0;
+		const bool bValueIsEven = static_cast<uint64>(floor(((bIsNegative) ? -F : F))) % 2 == 0;
+		if (bValueIsEven) { return (bIsNegative) ? floor(F + 0.5) : ceil(F - 0.5); }
+		else { return (bIsNegative) ? ceil(F - 0.5) : floor(F + 0.5); }
+	}
 };
 
 // ハッシュ (TSet/TMap の内部では使わない。Vec3 の GetTypeHash 用。値の算術には関与しない)。

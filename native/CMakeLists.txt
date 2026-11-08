@@ -60,3 +60,4 @@ function(mmdphys_add_test name source)
 endfunction()
 
 mmdphys_add_test(test_load tests/test_load.cpp)
+mmdphys_add_test(test_shim_math tests/test_shim_math.cpp)
