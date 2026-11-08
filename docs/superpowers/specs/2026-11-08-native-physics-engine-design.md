@@ -186,4 +186,9 @@ frame_change_post ハンドラ:
     GUI のビューポート表示そのものは未確認 (バックグラウンドでは画面描画がない)。実機確認はタスク 10 の手動検証に含める。
 - 互換層の `FMath` 等が UE と同じ演算をしているか。層 2 のビット一致で検出する。
 - Windows のビルドと検証は GitHub 公開が前提。公開はまだ (git 化もまだ)。
-- macOS で zip から入れたライブラリが Gatekeeper に止められないか。実機で確認する。
+- **確認済み (2026-11-08, macOS 27.2 arm64、タスク 13): ad-hoc 署名の dylib は、隔離属性 (`com.apple.quarantine`) が付いたまま残ると `dlopen` で拒否される。** 条件ごとの結果:
+  - zip をブラウザ DL 相当の隔離属性付きにし、Python `zipfile` で展開 (Blender の拡張機能インストールと同じ方式): 展開後のファイルに隔離属性は**付かない**。`codesign -v` OK、`ctypes.CDLL` **成功** (Blender 同梱 Python 3.13 / システム Python 3.14)。通常のインストール経路 (Blender が zip を展開する) では問題が出ない。
+  - 同じ zip を `ditto -x -k` で展開 (隔離属性が伝播する): dylib に `com.apple.quarantine` が付き、`ctypes.CDLL` が **失敗**する (`code signature ... not valid for use in process: library load disallowed by system policy`)。`codesign -v` は OK、`spctl --assess` は `rejected` (隔離の有無にかかわらず、ad-hoc 署名は常に rejected)。
+  - 隔離属性を `removexattr` (ctypes で libc を呼ぶ) で外すと、同じファイルが `ctypes.CDLL` で読み込める (確認済み)。macOS の Python には `os.removexattr` が無い。
+  - 隔離属性が残りうる場面: ブラウザで落とした zip を Finder / アーカイブユーティリティで展開し、その**フォルダ**を拡張機能フォルダへ手で置いた場合 (開発用の置き方)。
+  - **対策案 (実装しない)**: ① `engine_bridge` がライブラリを読む前に `com.apple.quarantine` を外す (`ctypes` で `removexattr`、失敗しても続行。読み込み失敗時の理由表示は既にあるので、隔離属性が原因のときは「`xattr -d com.apple.quarantine <path>` を実行」と案内してもよい)。② 配布を広げるなら Developer ID 署名 + 公証 (notarization)。

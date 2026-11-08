@@ -47,6 +47,43 @@ inside Blender. It is the Blender counterpart of
 
 ### [1] Physics
 
+The secondary-motion engine is chosen with the **Physics engine** switch in the panel (a per-scene setting).
+
+| | Native engine (default) | Blender Bullet |
+|---|---|---|
+| What computes it | The **same in-house engine as Unity / UE5** (a C++ implementation compatible with Bullet 2.75). Blender's own physics is not used | Blender's built-in rigid-body simulation (Bullet) |
+| Fidelity | The **bake is bit-identical to the C# engine run with the Unity / UE5 playback settings** | Close, but not identical |
+| Wiring | None (no rigid-body / joint objects are created) | Required (a button builds rigid bodies and joints) |
+| How to use | Bake / real-time display | Play the timeline from the start / bake |
+| Needs | The native library (bundled in the zip; macOS arm64 / Windows x64) | Nothing |
+
+If the native library cannot be loaded (unsupported OS/CPU, missing file, ...), the native engine becomes
+unselectable and the panel shows the reason together with the Blender Bullet UI.
+
+#### Native engine
+
+The panel has three buttons. All need a target armature and its GLB path (recorded at import; otherwise use the GLB field in the panel).
+
+| Button | What it does |
+|---|---|
+| **物理をベイク (自作エンジン)** (Bake physics, native engine) | Computes the physics for every frame from the GLB's animation and writes keys for the secondary-motion bones into the NLA track **"MMD Physics Bake"**. Playback, render and export use that track |
+| **ベイクを削除** (Delete bake) | Removes the "MMD Physics Bake" track and its action |
+| **リアルタイム表示** (Real-time display) | Computes physics on every frame change and moves the secondary-motion bones (press again to stop) |
+
+- **Bake conditions**: the Unity / UE5 playback settings (step 1/60 × 2, solver iterations 10, joint-velocity iterations 40, ...)
+  plus the UE5 node's write-back settings (mode-2 alignment, rotation clamp 0.5). The procedure is the same as physbake
+  (mmd2gltf-cs): align to the first-frame pose, 2 s of warm-up, then step every frame. The input is the animation inside the GLB;
+  **actions you edit in Blender are not reflected in the bake.**
+- **fps**: keys follow the **scene fps at bake time**. If you change the fps, delete the bake and bake again.
+- **Real-time display** (it takes the pose Blender evaluated as input, so bit-exactness is not a goal):
+  - Seeking or going backward resets the physics and recomputes.
+  - There is no warm-up, so the secondary-motion bones are still settling during the first few frames.
+  - It does nothing for an armature that already has a bake (it waits); delete the bake to enable it.
+  - Stopping returns the physics bones to their rest pose.
+  - If the computation diverges (NaN), the panel shows a warning.
+
+#### Blender Bullet
+
 Rigid bodies and joints from PMX are driven by **Blender's built-in rigid-body simulation (Bullet)**.
 
 | PMX | Blender mapping |
@@ -59,7 +96,7 @@ Rigid bodies and joints from PMX are driven by **Blender's built-in rigid-body s
 | Collision groups / masks | Non-colliding pairs get an empty constraint with `disable_collisions` (`ncc_*`) |
 | Gravity | `9.8 × unitScale` so pendulum periods match MMD (optional) |
 
-Everything is created under the `MMD Physics` collection and can be removed with one click.
+Everything is created under the `MMD Physics` collection and can be removed with one click. See "When you choose Blender Bullet" below for the caveats specific to this route.
 
 ### [2] Materials
 
@@ -77,21 +114,44 @@ a perfectly straight leg (the same problem MMD solves with its knee special case
 ## Requirements
 
 - Blender 4.2 or later (developed on 5.2 LTS) with the bundled glTF importer enabled
-- A `.glb` converted by `mmd2gltf-gui`
+- A `.glb` converted by `mmd2gltf-gui` (or `mmd2gltf-cs`)
+- For the native engine: macOS (Apple Silicon) or Windows (x64); the library ships in the zip
 - Optional: `toon01.bmp`–`toon10.bmp` from the MMD distribution for shared toons
 
 ## Install
 
 Build a zip with `tools/build_zip.sh` and install it from *Edit > Preferences > Extensions > Install from Disk*.
 
+**macOS note**: the native library (`native_lib/libmmdphys.dylib`) is ad-hoc signed and not notarized. Installing through
+Blender's *Install from Disk* works (verified). But if you extract a browser-downloaded zip with Finder and copy the
+resulting **folder** into the extensions folder by hand, the quarantine attribute can remain and the library fails to load.
+The panel shows the reason; run `xattr -d com.apple.quarantine <path to libmmdphys.dylib>` in a terminal.
+
 ## Usage
 
 1. *File > Import > mmd2gltf GLB (.glb)* and pick the file (physics / materials / IK toggles in the dialog)
 2. The **mmd2gltf** tab in the 3D viewport sidebar (`N`) lets you run each step again later
-3. Press *Reset physics cache* and play **from the start frame** (Blender's rigid bodies only simulate
-   sequentially); use *Bake physics* to scrub or export. Use Material Preview / EEVEE for the toon look.
+3. Pick the **Physics engine** (native by default).
+   - **Native engine**: press *物理をベイク (自作エンジン)*. No wiring is needed (and the import dialog's "wire physics"
+     creates nothing while the native engine is selected; if the library cannot load, Blender Bullet is wired instead).
+     Afterwards you can play, render, export and scrub freely. *リアルタイム表示* is handy for a quick look (it only works while there is no bake).
+   - **Blender Bullet**: press *Reset physics cache* and play **from the start frame** (Blender's rigid bodies only
+     simulate sequentially); use *Bake physics* to scrub or export.
+4. Use Material Preview / EEVEE for the toon look.
 
 ## Design notes (differences from the Unity version)
+
+### Common
+
+- **Coordinates**: raw PMX values are assembled in world space and mapped as
+  `(x, y, z) → (x, z, y) × unitScale` with rotations conjugated by the y/z swap (angles flip sign).
+  `physicsGltf` (bone-local) is not used because Blender's imported bone axes differ from glTF node axes.
+- Toon shading uses Shader to RGB and therefore works in **EEVEE only**.
+- Not supported: `ambient` / `specular`, `sphereMode = 3`, bone / group / material morphs.
+
+### When you choose Blender Bullet
+
+The native engine is not affected by these (the same engine as Unity / UE5 computes with the same settings).
 
 - **Initial penetration**: MMD models are authored with hair roots and skirt rows inside the body colliders.
   Blender's Bullet pushes them out, so skirts fly open on the first frames (measured: 8 cm in 3 frames).
@@ -103,11 +163,51 @@ Build a zip with `tools/build_zip.sh` and install it from *Edit > Preferences > 
   bodies, so they are placed at the start-frame pose with a matching Child Of inverse; dynamic bodies of a chain
   are placed by the first non-physics ancestor (FK-rest), which keeps joint frames consistent with baked hair keys.
 - **Zero-size bodies** without joints are converted to bone-follow bodies with a warning.
-- **Coordinates**: raw PMX values are assembled in world space and mapped as
-  `(x, y, z) → (x, z, y) × unitScale` with rotations conjugated by the y/z swap (angles flip sign).
-  `physicsGltf` (bone-local) is not used because Blender's imported bone axes differ from glTF node axes.
-- Toon shading uses Shader to RGB and therefore works in **EEVEE only**.
-- Not supported: `ambient` / `specular`, `sphereMode = 3`, bone / group / material morphs.
+
+## Known limitations
+
+- **Native engine: physics → non-physics → physics bone chains** are not exact (the middle bone is handled with FK).
+- **Blender 4.2–4.3** (legacy action API path): the native bake is untested there (verified on 5.1 / 5.2).
+- **Windows library** is meant to come from CI and is not built until the repository is published (the current zip is macOS arm64 only).
+- **Blender 5.1's own glTF importer** can crash on some MMD GLBs that carry custom attributes (`_SDEF_*`, `_EDGESCALE`, `_WEIGHTTYPE`). That is an importer bug, not this add-on.
+
+## Building the native library
+
+The native engine library is built from `native/` (CMake). The distributed zip already contains a prebuilt one, so this is only needed for development.
+
+```bash
+cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
+cmake --build native/build
+ctest --test-dir native/build
+cmake --install native/build     # copies into mmd2gltf_blender_importer/native_lib/ (macOS also ad-hoc signs)
+```
+
+- Build in **Release** and never use `-ffast-math` / `-Ofast` / `/fp:fast` (results would drift from the C# engine; CMake sets `-ffp-contract=off` / `/fp:precise`).
+- `ctest` includes the bit-exact parity tests against the C# reference (layers 2-4). Put the sibling repositories next to this one:
+  `mmd2gltf-ue5-physics-importer` (sync check of `native/vendor/MmdPhysicsCore`) and `mmd2gltf-cs` (physbake produces the reference CSVs; needs the .NET SDK).
+  Test GLBs are passed via `MMD_TEST_GLB_SMALL` / `MMD_TEST_GLB` (large) / `MMD_TEST_GLB_NOEXTRAS` / `MMD_TEST_GLB_NOANIM` (never committed). Use `-DMMD_UE5_CORE_DIR=...` if the UE5 repo is elsewhere.
+- On Windows build with Visual Studio (MSVC); `bash` (Git for Windows) is required.
+- To use a library you built elsewhere, set the environment variable `MMD_NATIVE_LIB` to its full path.
+
+## Layout
+
+```
+mmd2gltf_blender_importer/
+  __init__.py          operators, panel, settings
+  engine_bridge.py     ctypes wrapper for the native engine
+  selfphys_bake.py     native bake -> NLA track "MMD Physics Bake"
+  selfphys_live.py     native real-time display (frame-change handler)
+  native_lib/          prebuilt library (libmmdphys.dylib / mmdphys.dll)
+  physics_builder.py   Blender Bullet route: rigid bodies / joints / non-collision constraints
+  glb_reader.py, mmd_math.py, overlap.py, material_builder.py, ik_builder.py
+native/                C++ sources of the in-house engine (CMake)
+  vendor/MmdPhysicsCore/  UE5 engine, vendored unmodified
+  shim/  UE-type replacement headers
+  src/   GLB reader, FK, bake, C API
+  tests/ bit-exact tests against the C# reference (CTest)
+tests/run_headless.py  headless check
+tools/build_zip.sh     builds the distribution zip
+```
 
 ## Verification
 
