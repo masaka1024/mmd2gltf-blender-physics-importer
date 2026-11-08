@@ -26,9 +26,13 @@
 #   書き込み先: 新規アクション BAKE_ACTION_NAME (揺れ物ボーンの location /
 #   rotation_quaternion だけ) を NLA トラック BAKE_TRACK_NAME (最上段, REPLACE) に置く。
 #   注意: Blender はアクティブなアクションを NLA より上で評価する。元のアクションに
-#   揺れ物ボーンの fcurve があるとベイクが上書きされるので、結果の
-#   "overridden_bones" で知らせる (元のアクションは変更しない)。
+#   揺れ物ボーンの fcurve (焼き込み済み GLB など) があるとベイクが隠れるので、
+#   ベイクがある間は、その揺れ物ボーンの変換 fcurve だけを mute する (キーは触らない)。
+#   mute した fcurve (アクション名 + スロット + data_path + index) はアーマチュアの
+#   ID プロパティ PROP_MUTED に JSON で記録し、remove_bake / 再ベイクで、
+#   まだ mute のままのものだけ戻す。結果の "overridden_bones" は従来どおり返す。
 # ===========================================================================
+import json
 import time
 
 import bpy
@@ -40,6 +44,8 @@ from . import engine_bridge, glb_reader, mmd_math as mm, physics_builder
 BAKE_ACTION_NAME = "MMD Physics Bake"
 BAKE_TRACK_NAME = "MMD Physics Bake"
 PROP_BAKE_OWNER = "mmd2gltf_bake_owner"
+PROP_MUTED = "mmd2gltf_bake_muted"
+_TRANSFORM_PROPS = ("location", "rotation_quaternion", "rotation_euler", "rotation_axis_angle", "scale")
 
 _P = np.array(mm.P3, dtype=np.float64)
 _INTERP_LINEAR = bpy.types.Keyframe.bl_rna.properties["interpolation"].enum_items["LINEAR"].value
@@ -191,6 +197,81 @@ def action_fcurves(action, arm=None):
     return list(action.fcurves)
 
 
+def _slot_fcurves(action, slot_identifier):
+    """スロット識別子 (旧 API では None) を指定してアクションの fcurve 一覧を返す。"""
+    if action is None:
+        return []
+    if hasattr(action, "layers"):
+        slot = next((s for s in action.slots if s.identifier == slot_identifier), None)
+        if slot is None:
+            return []
+        out = []
+        for layer in action.layers:
+            for st in layer.strips:
+                cb = st.channelbag(slot)
+                if cb is not None:
+                    out.extend(cb.fcurves)
+        return out
+    return list(action.fcurves)
+
+
+def _active_slot_identifier(action, arm):
+    if not hasattr(action, "layers"):
+        return None
+    slot = _anim_slot(arm) if arm.animation_data.action == action else None
+    if slot is None:
+        for s in action.slots:
+            if s.target_id_type == "OBJECT" and (s.identifier == "OB" + arm.name or s.name_display == arm.name):
+                return s.identifier
+        if len(action.slots) == 1:
+            return action.slots[0].identifier
+        return None
+    return slot.identifier
+
+
+def _mute_physics_curves(arm, names):
+    """アクティブなアクションの、names のボーンの変換 fcurve を mute して記録する。戻り値 = 件数。"""
+    ad = arm.animation_data
+    act = ad.action if ad is not None else None
+    if act is None:
+        return 0
+    prefixes = {'pose.bones["%s"].' % bpy.utils.escape_identifier(n) for n in names}
+    items = []
+    for fc in action_fcurves(act, arm):
+        dp = fc.data_path
+        if fc.mute:
+            continue  # 利用者が mute 済み → 触らない
+        for pre in prefixes:
+            if dp.startswith(pre) and dp[len(pre):] in _TRANSFORM_PROPS:
+                fc.mute = True
+                items.append([dp, fc.array_index])
+                break
+    if items:
+        arm[PROP_MUTED] = json.dumps({"action": act.name, "slot": _active_slot_identifier(act, arm),
+                                      "curves": items})
+    return len(items)
+
+
+def _unmute_physics_curves(arm):
+    """記録した fcurve のうち、まだ mute のままのものを戻す。記録は消す。戻り値 = 戻した数。"""
+    raw = arm.get(PROP_MUTED)
+    if raw is None:
+        return 0
+    del arm[PROP_MUTED]
+    try:
+        rec = json.loads(raw)
+        act = bpy.data.actions.get(rec["action"])
+        want = {(dp, int(i)) for dp, i in rec["curves"]}
+    except (ValueError, KeyError, TypeError):
+        return 0
+    n = 0
+    for fc in _slot_fcurves(act, rec.get("slot")):
+        if fc.mute and (fc.data_path, fc.array_index) in want:
+            fc.mute = False
+            n += 1
+    return n
+
+
 def _new_bake_action(arm):
     act = bpy.data.actions.new(BAKE_ACTION_NAME)
     act[PROP_BAKE_OWNER] = arm.name
@@ -251,7 +332,7 @@ def has_bake(arm):
 
 def remove_bake(arm):
     """ベイクの NLA トラックとアクションを消す。何か消したら True。"""
-    removed = False
+    removed = _unmute_physics_curves(arm) > 0
     ad = arm.animation_data
     actions = set()
     if ad is not None:
@@ -330,12 +411,10 @@ def bake(context, arm, glb_path, report, progress=None):
             if bn in names:
                 over.add(bn)
     result["overridden_bones"] = sorted(over)
-    if over:
-        report("WARNING", f"アクティブなアクションが揺れ物ボーン {len(over)} 本を上書きします "
-                          "(NLA より上で評価されるため、ベイクが効きません)")
 
     t0 = time.perf_counter()
     remove_bake(arm)
+    result["muted_curves"] = 0
     act, slot, cb = _new_bake_action(arm)
 
     pose_cache = {}
@@ -400,5 +479,10 @@ def bake(context, arm, glb_path, report, progress=None):
     st.blend_type = "REPLACE"
     st.extrapolation = "HOLD"
     st.name = BAKE_ACTION_NAME
+    # アクティブなアクションの揺れ物ボーン fcurve を mute (NLA より上で評価されベイクを隠すため)
+    result["muted_curves"] = _mute_physics_curves(arm, names)
+    if result["muted_curves"]:
+        report("INFO", f"アクティブなアクションの揺れ物ボーン {len(over)} 本の fcurve "
+                       f"{result['muted_curves']} 本を mute しました (ベイクを削除すると戻ります)")
     result["seconds_write"] = round(time.perf_counter() - t0, 3)
     return result

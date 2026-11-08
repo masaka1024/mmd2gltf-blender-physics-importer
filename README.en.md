@@ -70,6 +70,8 @@ The panel has three buttons. All need a target armature and its GLB path (record
 | **ベイクを削除** (Delete bake) | Removes the "MMD Physics Bake" track and its action |
 | **リアルタイム表示** (Real-time display) | Computes physics on every frame change and moves the secondary-motion bones (press again to stop) |
 
+**Pre-baked GLBs:** if the active action already has keys on the secondary-motion bones, Blender would evaluate it above the NLA and hide the bake. While a bake exists, the add-on therefore mutes those bones' fcurves in the active action (keys are never modified). *ベイクを削除* restores them.
+
 - **Bake conditions**: the Unity / UE5 playback settings (step 1/60 × 2, solver iterations 10, joint-velocity iterations 40, ...)
   plus the UE5 node's write-back settings (mode-2 alignment, rotation clamp 0.5). The procedure is the same as physbake
   (mmd2gltf-cs): align to the first-frame pose, 2 s of warm-up, then step every frame. The input is the animation inside the GLB;
