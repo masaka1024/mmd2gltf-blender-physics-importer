@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
+# macOS の最低対応版 (Blender 4.2 の macOS 最低要件 11.2)。未指定だとビルド機の OS 版になり、古い macOS で読めない。
+# project() より前に置く。既存の build ツリーでは -DCMAKE_OSX_DEPLOYMENT_TARGET=11.2 で上書きするか作り直す。
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.2" CACHE STRING "Minimum macOS version")
 project(mmdphys LANGUAGES CXX)
 if(POLICY CMP0177)
   cmake_policy(SET CMP0177 NEW)
@@ -47,6 +50,11 @@ if(NOT MMD_SYNC_RESULT EQUAL 0)
   message(FATAL_ERROR "native/vendor/MmdPhysicsCore is out of sync with ${MMD_UE5_CORE_DIR}")
 endif()
 
+# assert 等の __FILE__ にビルド機の絶対パスを埋め込まない (配布するライブラリに個人のパスを残さない)。
+if(NOT MSVC)
+  add_compile_options("-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=native/")
+endif()
+
 # --- 浮動小数点: C# エンジンと数値を bit 単位で比べるため、縮約・fast-math を禁止 ---
 function(mmdphys_fp_flags target)
   if(MSVC)
@@ -77,10 +85,22 @@ mmdphys_add_test(test_shim_math tests/test_shim_math.cpp)
 
 # --- 層 2: エンジン単体のビット一致 (C# 参照エンジンの CSV と比較) ---
 # 基準 CSV は build ディレクトリに作る。テスト GLB は環境変数で渡し、リポジトリには入れない。
-set(MMD_TEST_GLB_SMALL "$ENV{MMD_TEST_GLB_SMALL}" CACHE FILEPATH "Small test GLB (never committed)")
-if(NOT MMD_TEST_GLB_SMALL)
-  set(MMD_TEST_GLB_SMALL "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb")
-endif()
+# 未設定のまま ctest すると、そのテストは「環境変数が未設定」と言って失敗する (native/tests/local_env.example.sh 参照)。
+function(mmdphys_test_glb var desc)
+  if(NOT ${var} AND NOT "$ENV{${var}}" STREQUAL "")
+    set(${var} "$ENV{${var}}" CACHE FILEPATH "${desc}" FORCE)
+  else()
+    set(${var} "$ENV{${var}}" CACHE FILEPATH "${desc}")
+  endif()
+  if(NOT ${var})
+    message(STATUS "${var} is not set: tests that need it will fail (export it before configuring)")
+  endif()
+endfunction()
+mmdphys_test_glb(MMD_TEST_GLB_SMALL "Small test GLB (never committed)")
+mmdphys_test_glb(MMD_TEST_GLB "Large test GLB (never committed)")
+mmdphys_test_glb(MMD_TEST_GLB_NOEXTRAS "GLB without extras.mmd (never committed)")
+mmdphys_test_glb(MMD_TEST_GLB_NOANIM "GLB without animation (never committed)")
+set_tests_properties(test_load PROPERTIES ENVIRONMENT "MMD_TEST_GLB_SMALL=${MMD_TEST_GLB_SMALL}")
 add_executable(parity_engine tests/parity_engine.cpp)
 target_link_libraries(parity_engine PRIVATE mmdphys_core)
 target_include_directories(parity_engine PRIVATE tests)
@@ -95,10 +115,6 @@ set_tests_properties(parity_engine PROPERTIES
   ENVIRONMENT "MMD_TEST_GLB_SMALL=${MMD_TEST_GLB_SMALL}" TIMEOUT 600)
 
 # --- 層 3: FK のビット一致 (C# physbake の --dump-fk と比較) ---
-set(MMD_TEST_GLB "$ENV{MMD_TEST_GLB}" CACHE FILEPATH "Large test GLB (never committed)")
-if(NOT MMD_TEST_GLB)
-  set(MMD_TEST_GLB "/Users/masaka1024/Downloads/IA 2/IA.glb")
-endif()
 add_library(mmdnative STATIC src/mmd_glb.cpp src/mmd_fk.cpp src/mmd_bake.cpp)
 target_link_libraries(mmdnative PUBLIC mmdphys_core)
 target_include_directories(mmdnative PUBLIC src)
@@ -173,14 +189,6 @@ if(APPLE)
   ")
 endif()
 
-set(MMD_TEST_GLB_NOEXTRAS "$ENV{MMD_TEST_GLB_NOEXTRAS}" CACHE FILEPATH "GLB without extras.mmd (never committed)")
-if(NOT MMD_TEST_GLB_NOEXTRAS)
-  set(MMD_TEST_GLB_NOEXTRAS "/Users/masaka1024/KAIHATU/toyota-8fd25/out/toyota_8fd25.glb")
-endif()
-set(MMD_TEST_GLB_NOANIM "$ENV{MMD_TEST_GLB_NOANIM}" CACHE FILEPATH "GLB without animation (never committed)")
-if(NOT MMD_TEST_GLB_NOANIM)
-  set(MMD_TEST_GLB_NOANIM "/Users/masaka1024/KAIHATU/zatsu_anime/src_f8/work/out.glb")
-endif()
 
 add_executable(test_capi tests/test_capi.cpp)
 target_link_libraries(test_capi PRIVATE mmdphys mmdnative)

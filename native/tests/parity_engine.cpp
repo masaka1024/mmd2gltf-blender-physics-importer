@@ -105,7 +105,12 @@ int main(int argc, char** argv)
 {
 	if (argc < 2) { std::fprintf(stderr, "usage: parity_engine <ref.csv> [frames]\n"); return 2; }
 	const char* Env = std::getenv("MMD_TEST_GLB_SMALL");
-	const std::string GlbPath = Env ? Env : "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb";
+	if (!Env || !*Env)
+	{
+		std::fprintf(stderr, "FAIL: environment variable MMD_TEST_GLB_SMALL is not set (see native/tests/local_env.example.sh)\n");
+		return 1;
+	}
+	const std::string GlbPath = Env;
 	const int Frames = argc > 2 ? std::atoi(argv[2]) : 300;
 
 	std::vector<Row> Golden;

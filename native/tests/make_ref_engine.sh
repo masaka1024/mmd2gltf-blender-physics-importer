@@ -4,7 +4,11 @@
 # 環境変数: MMD_UE5_REPO (既定 ../../mmd2gltf-ue5-physics-importer)、MMD_TEST_GLB_SMALL
 set -euo pipefail
 OUT="${1:?usage: make_ref_engine.sh <out.csv> [glb] [frames]}"
-GLB="${2:-${MMD_TEST_GLB_SMALL:-/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb}}"
+GLB="${2:-${MMD_TEST_GLB_SMALL:-}}"
+if [ -z "$GLB" ]; then
+  echo "error: テスト GLB がありません。引数 [glb] か環境変数 MMD_TEST_GLB_SMALL で渡してください (native/tests/local_env.example.sh)" >&2
+  exit 1
+fi
 FRAMES="${3:-300}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UE5="${MMD_UE5_REPO:-$HERE/../../../mmd2gltf-ue5-physics-importer}"
@@ -15,7 +19,7 @@ PIN=74fcc16
 
 if [ "$(git -C "$UE5/.upstream/unity" rev-parse --short=7 HEAD 2>/dev/null || true)" != "$PIN" ]; then
   echo "error: $UE5/.upstream/unity が $PIN ではありません。次で用意してください:" >&2
-  echo "  git clone /Users/masaka1024/KAIHATU/mmd2gltf-unity-physics-importer $UE5/.upstream/unity && git -C $UE5/.upstream/unity checkout $PIN" >&2
+  echo "  git clone https://github.com/masaka1024/mmd2gltf-unity-physics-importer $UE5/.upstream/unity && git -C $UE5/.upstream/unity checkout $PIN" >&2
   exit 1
 fi
 

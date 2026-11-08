@@ -127,8 +127,8 @@ jobs:
           # GLB が無いものは除外し、何を飛ばしたかを明示する (シェル/同期/shim テストは常に走る)。
           EX=()
           if [ "$HAVE_SMALL" != 1 ]; then
-            echo "::warning::MMD_TEST_GLB_SMALL_URL not available: skipping parity_engine, *_small, capi"
-            EX+=('parity_engine' '_small$' '^capi$')
+            echo "::warning::MMD_TEST_GLB_SMALL_URL not available: skipping test_load, parity_engine, *_small, capi"
+            EX+=('^test_load$' 'parity_engine' '_small$' '^capi$')
           fi
           if [ "$HAVE_BIG" != 1 ]; then
             echo "::warning::MMD_TEST_GLB_URL not available: skipping *_big"
@@ -144,6 +144,17 @@ jobs:
             args+=(-E "$RE")
           fi
           ctest "${args[@]}"
+
+      # macOS: 最低対応版 (LC_BUILD_VERSION minos) が 11.2 であること (未指定だとビルド機の OS 版になり古い macOS で読めない)
+      - name: Check macOS deployment target
+        if: runner.os == 'macOS'
+        run: |
+          otool -l importer/native/build/libmmdphys.dylib | grep -A3 LC_BUILD_VERSION
+          minos="$(otool -l importer/native/build/libmmdphys.dylib | grep -A3 LC_BUILD_VERSION | awk '$1 == "minos" {print $2}')"
+          if [ "$minos" != "11.2" ]; then
+            echo "::error::libmmdphys.dylib minos is '$minos' (expected 11.2)"
+            exit 1
+          fi
 
       - name: Locate library
         id: lib

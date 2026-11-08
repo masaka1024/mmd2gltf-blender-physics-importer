@@ -17,7 +17,12 @@ static int Fail(const char* What, long Got, long Want)
 int main()
 {
 	const char* Env = std::getenv("MMD_TEST_GLB_SMALL");
-	const std::string Path = Env ? Env : "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb";
+	if (!Env || !*Env)
+	{
+		std::fprintf(stderr, "FAIL: environment variable MMD_TEST_GLB_SMALL is not set (see native/tests/local_env.example.sh)\n");
+		return 1;
+	}
+	const std::string Path = Env;
 
 	float UnitScale = 1.0f;
 	TArray<FString> Warnings;

@@ -16,18 +16,23 @@
 static int g_fail = 0;
 #define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); g_fail++; } } while (0)
 
-static std::string Env(const char* k, const char* dflt)
+static std::string Env(const char* k)
 {
 	const char* v = std::getenv(k);
-	return (v && *v) ? v : dflt;
+	if (!v || !*v)
+	{
+		std::fprintf(stderr, "FAIL: environment variable %s is not set (see native/tests/local_env.example.sh)\n", k);
+		std::exit(1);
+	}
+	return v;
 }
 static bool Has(const char* hay, const char* needle) { return std::strstr(hay, needle) != nullptr; }
 
 int main()
 {
-	const std::string small = Env("MMD_TEST_GLB_SMALL", "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb");
-	const std::string noExtras = Env("MMD_TEST_GLB_NOEXTRAS", "/Users/masaka1024/KAIHATU/toyota-8fd25/out/toyota_8fd25.glb");
-	const std::string noAnim = Env("MMD_TEST_GLB_NOANIM", "/Users/masaka1024/KAIHATU/zatsu_anime/src_f8/work/out.glb");
+	const std::string small = Env("MMD_TEST_GLB_SMALL");
+	const std::string noExtras = Env("MMD_TEST_GLB_NOEXTRAS");
+	const std::string noAnim = Env("MMD_TEST_GLB_NOANIM");
 
 	CHECK(mmd_api_version() == 1);
 	CHECK(mmd_last_error() != nullptr && mmd_last_error()[0] == '\0');

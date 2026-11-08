@@ -33,6 +33,7 @@ int main(int argc, char** argv)
 {
 	if (argc < 3) { std::fprintf(stderr, "usage: parity_bake <glb> <ref.bake.csv>\n"); return 2; }
 	const std::string GlbPath = argv[1];
+	if (GlbPath.empty()) { std::fprintf(stderr, "FAIL: test GLB path is empty (set MMD_TEST_GLB_SMALL / MMD_TEST_GLB before configuring; see native/tests/local_env.example.sh)\n"); return 1; }
 
 	std::ifstream In(GlbPath, std::ios::binary);
 	if (!In) { std::fprintf(stderr, "FAIL: cannot open %s\n", GlbPath.c_str()); return 1; }
