@@ -10,11 +10,12 @@
 import os
 
 import bpy
-from bpy.props import (BoolProperty, FloatProperty, IntProperty, PointerProperty,
+from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty,
                        StringProperty)
 from bpy_extras.io_utils import ImportHelper
 
-from . import glb_reader, physics_builder, material_builder, ik_builder
+from . import (engine_bridge, glb_reader, physics_builder, material_builder, ik_builder,
+               selfphys_bake, selfphys_live)
 
 PROP_GLB = "mmd2gltf_glb"
 _model_cache = {}
@@ -66,6 +67,13 @@ def resolve_glb_path(context, arm):
     if s.glb_path and os.path.isfile(bpy.path.abspath(s.glb_path)):
         return bpy.path.abspath(s.glb_path)
     return ""
+
+
+def effective_engine(context):
+    """実際に使うエンジン。NATIVE を選んでいても自作ライブラリが読めなければ BULLET。"""
+    if context.scene.mmd2gltf.engine == "NATIVE" and engine_bridge.load_status()[0]:
+        return "NATIVE"
+    return "BULLET"
 
 
 def _physics_opts(s):
@@ -127,6 +135,10 @@ class MMD2GLTF_Preferences(bpy.types.AddonPreferences):
 class MMD2GLTF_SceneProps(bpy.types.PropertyGroup):
     glb_path: StringProperty(name="GLB", subtype="FILE_PATH", default="",
                              description="対象の .glb (アーマチュアに記録が無いときに使う)")
+    engine: EnumProperty(
+        name="物理エンジン", default="NATIVE",
+        items=[("NATIVE", "自作エンジン", "MMD 互換の自作物理 (配線不要。ベイクまたはリアルタイム表示)"),
+               ("BULLET", "Blender Bullet", "Blender のリジッドボディで再現する従来方式 (配線が必要)")])
     # physics
     place_at_frame: BoolProperty(name="先頭フレームの姿勢に合わせる", default=True,
                                  description="動的剛体をシーン開始フレームのボーン姿勢へ整合させてから配置する (MMD の物理リセット相当)")
@@ -227,7 +239,12 @@ class MMD2GLTF_OT_import(bpy.types.Operator, ImportHelper):
         if self.do_materials:
             st = material_builder.build(context, arm, model, _material_opts(context, s), rep)
             self.report({"INFO"}, f"材質 {st['materials']} 件を変換")
-        if self.do_physics:
+        if self.do_physics and effective_engine(context) == "NATIVE":
+            self.report({"INFO"}, "自作エンジンを使うため物理の配線は行いません (パネルからベイクまたはリアルタイム表示)")
+        elif self.do_physics:
+            if s.engine == "NATIVE":
+                self.report({"WARNING"}, "自作エンジンを読み込めないため Blender Bullet で配線します: "
+                            + engine_bridge.load_status()[1])
             st = physics_builder.build(context, arm, model, _physics_opts(s), rep)
             self.report({"INFO"}, f"物理: 剛体 {st['bodies']} (動的 {st['dynamic']} / 追従 {st['kinematic']}), "
                                   f"ジョイント {st['joints']}, 非衝突 {st['ncc']}")
@@ -270,12 +287,113 @@ class MMD2GLTF_OT_build_physics(bpy.types.Operator, _TargetMixin):
         if arm is None:
             return {"CANCELLED"}
         rep = Reporter(self)
+        if effective_engine(context) == "NATIVE":
+            self.report({"INFO"}, "自作エンジンは配線が要りません (ベイクまたはリアルタイム表示を使います)")
+            return {"CANCELLED"}
+        if context.scene.mmd2gltf.engine == "NATIVE":
+            rep("WARNING", "自作エンジンを読み込めないため Blender Bullet で配線します: "
+                + engine_bridge.load_status()[1])
         for w in model.warnings:
             rep("WARNING", w)
         st = physics_builder.build(context, arm, model, _physics_opts(context.scene.mmd2gltf), rep)
         self.report({"INFO"}, f"剛体 {st['bodies']} (動的 {st['dynamic']} / 追従 {st['kinematic']}), "
                               f"ジョイント {st['joints']} (スキップ {st['skipped_joints']}), 非衝突拘束 {st['ncc']}, "
                               f"初期めり込み {st.get('overlap', 0)} 組")
+        return {"FINISHED"}
+
+
+class MMD2GLTF_OT_native_bake(bpy.types.Operator):
+    """自作エンジンで全フレームの物理を計算し、揺れ物ボーンを NLA にベイクする"""
+    bl_idname = "mmd2gltf.native_bake"
+    bl_label = "物理をベイク (自作エンジン)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        arm = find_target_armature(context)
+        if arm is None:
+            self.report({"ERROR"}, "対象のアーマチュアを選択してください。")
+            return {"CANCELLED"}
+        path = resolve_glb_path(context, arm)
+        if not path:
+            self.report({"ERROR"}, "GLB のパスが分かりません。パネルの GLB 欄に指定してください。")
+            return {"CANCELLED"}
+        ok, reason = engine_bridge.load_status()
+        if not ok:
+            self.report({"ERROR"}, f"自作エンジンを読み込めません: {reason}")
+            return {"CANCELLED"}
+        wm = context.window_manager
+        errors = []
+
+        def rep(level, msg):
+            if level == "ERROR":
+                errors.append(msg)
+            self.report({level}, msg)
+
+        wm.progress_begin(0, 100)
+        try:
+            def progress(done, total):
+                wm.progress_update(int(100 * done / max(total, 1)))
+
+            try:
+                r = selfphys_bake.bake(context, arm, path, rep, progress)
+            except Exception as e:  # noqa: BLE001
+                self.report({"ERROR"}, f"ベイクに失敗: {e}")
+                return {"CANCELLED"}
+        finally:
+            wm.progress_end()
+        if errors:
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"ベイク完了: {r['frames']} フレーム / ボーン {r['bones']} 本 "
+                              f"(計算 {r.get('seconds_native', 0)} 秒, 書き込み {r.get('seconds_write', 0)} 秒)")
+        return {"FINISHED"}
+
+
+class MMD2GLTF_OT_native_remove_bake(bpy.types.Operator):
+    """自作エンジンのベイク (NLA トラックとアクション) を削除する"""
+    bl_idname = "mmd2gltf.native_remove_bake"
+    bl_label = "ベイクを削除"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        arm = find_target_armature(context)
+        if arm is None:
+            self.report({"ERROR"}, "対象のアーマチュアを選択してください。")
+            return {"CANCELLED"}
+        if selfphys_bake.remove_bake(arm):
+            self.report({"INFO"}, "ベイクを削除しました")
+        else:
+            self.report({"INFO"}, "削除するベイクはありません")
+        return {"FINISHED"}
+
+
+class MMD2GLTF_OT_native_live_toggle(bpy.types.Operator):
+    """自作エンジンのリアルタイム表示を開始 / 停止する (フレーム変更ごとに計算)"""
+    bl_idname = "mmd2gltf.native_live_toggle"
+    bl_label = "リアルタイム表示"
+
+    def execute(self, context):
+        if selfphys_live.is_running():
+            selfphys_live.stop()
+            self.report({"INFO"}, "リアルタイム表示を止めました")
+            return {"FINISHED"}
+        arm = find_target_armature(context)
+        if arm is None:
+            self.report({"ERROR"}, "対象のアーマチュアを選択してください。")
+            return {"CANCELLED"}
+        path = resolve_glb_path(context, arm)
+        if not path:
+            self.report({"ERROR"}, "GLB のパスが分かりません。パネルの GLB 欄に指定してください。")
+            return {"CANCELLED"}
+        try:
+            selfphys_live.start(context, arm, path)
+        except Exception as e:  # noqa: BLE001  (RuntimeError の理由 / NativeError)
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        if selfphys_bake.has_bake(arm):
+            self.report({"WARNING"}, "ベイク済みのため、リアルタイム表示は待機します "
+                                     "(ベイクを削除すると有効になります)")
+        else:
+            self.report({"INFO"}, "リアルタイム表示を開始しました")
         return {"FINISHED"}
 
 
@@ -419,6 +537,57 @@ class MMD2GLTF_PT_panel(bpy.types.Panel):
 
         box = lay.box()
         box.label(text="【1】物理", icon="PHYSICS")
+        native_ok, native_reason = engine_bridge.load_status()
+        row = box.row()
+        row.enabled = native_ok   # 自作エンジンが読めないときは選択不可 (Bullet 方式を表示)
+        row.prop(s, "engine", expand=True)
+        use_native = s.engine == "NATIVE" and native_ok
+        if s.engine == "NATIVE" and not native_ok:
+            col = box.column(align=True)
+            col.alert = True
+            col.label(text="自作エンジンを使えません (Blender Bullet 方式を表示)", icon="ERROR")
+            col.label(text=native_reason[:80])
+        if use_native:
+            self._draw_native(context, box, arm)
+        else:
+            self._draw_bullet(context, box, s)
+
+        box = lay.box()
+        box.label(text="【2】材質", icon="MATERIAL")
+        box.operator(MMD2GLTF_OT_build_materials.bl_idname, icon="NODE_MATERIAL")
+        col = box.column(align=True)
+        col.prop(s, "use_orig_texture")
+        row = col.row(align=True)
+        row.prop(s, "build_toon")
+        row.prop(s, "build_sphere")
+        col.prop(s, "build_edge")
+        col.prop(s, "edge_scale")
+        col.prop(s, "edge_skip_ratio")
+
+        box = lay.box()
+        box.label(text="【3】IK", icon="CON_KINEMATIC")
+        box.operator(MMD2GLTF_OT_build_ik.bl_idname, icon="CON_KINEMATIC")
+        box.prop(s, "ik_limits")
+        box.prop(s, "ik_prebend")
+
+    def _draw_native(self, context, box, arm):
+        baked = arm is not None and selfphys_bake.has_bake(arm)
+        box.label(text="ベイク済み" if baked else "未ベイク", icon="CHECKMARK" if baked else "DOT")
+        box.operator(MMD2GLTF_OT_native_bake.bl_idname, icon="RENDER_ANIMATION")
+        box.operator(MMD2GLTF_OT_native_remove_bake.bl_idname, icon="TRASH")
+        running = selfphys_live.is_running()
+        box.operator(MMD2GLTF_OT_native_live_toggle.bl_idname,
+                     text="リアルタイム表示を止める" if running else "リアルタイム表示",
+                     icon="PAUSE" if running else "PLAY", depress=running)
+        if running and baked:
+            box.label(text="ベイク済みのためリアルタイム表示は待機中", icon="INFO")
+        if selfphys_live.last_error():
+            box.label(text="停止: " + selfphys_live.last_error()[:70], icon="ERROR")
+        if selfphys_live.last_warning():
+            box.label(text="発散: " + str(selfphys_live.last_warning())[:70], icon="ERROR")
+        box.label(text="キーはベイク時のシーン fps に従います (fps を変えたら再ベイク)", icon="INFO")
+
+    def _draw_bullet(self, context, box, s):
         row = box.row(align=True)
         row.operator(MMD2GLTF_OT_build_physics.bl_idname, icon="RIGID_BODY")
         row.operator(MMD2GLTF_OT_remove_physics.bl_idname, text="", icon="TRASH")
@@ -445,24 +614,6 @@ class MMD2GLTF_PT_panel(bpy.types.Panel):
         col.prop(s, "solver_iterations")
         col.prop(s, "margin_ratio")
 
-        box = lay.box()
-        box.label(text="【2】材質", icon="MATERIAL")
-        box.operator(MMD2GLTF_OT_build_materials.bl_idname, icon="NODE_MATERIAL")
-        col = box.column(align=True)
-        col.prop(s, "use_orig_texture")
-        row = col.row(align=True)
-        row.prop(s, "build_toon")
-        row.prop(s, "build_sphere")
-        col.prop(s, "build_edge")
-        col.prop(s, "edge_scale")
-        col.prop(s, "edge_skip_ratio")
-
-        box = lay.box()
-        box.label(text="【3】IK", icon="CON_KINEMATIC")
-        box.operator(MMD2GLTF_OT_build_ik.bl_idname, icon="CON_KINEMATIC")
-        box.prop(s, "ik_limits")
-        box.prop(s, "ik_prebend")
-
 
 def menu_import(self, context):
     self.layout.operator(MMD2GLTF_OT_import.bl_idname, text="mmd2gltf GLB (.glb) [物理・材質付き]")
@@ -473,6 +624,9 @@ classes = (
     MMD2GLTF_SceneProps,
     MMD2GLTF_OT_import,
     MMD2GLTF_OT_build_physics,
+    MMD2GLTF_OT_native_bake,
+    MMD2GLTF_OT_native_remove_bake,
+    MMD2GLTF_OT_native_live_toggle,
     MMD2GLTF_OT_remove_physics,
     MMD2GLTF_OT_build_materials,
     MMD2GLTF_OT_build_ik,
@@ -491,6 +645,7 @@ def register():
 
 
 def unregister():
+    selfphys_live.stop()   # ハンドラと native のハンドルを先に解放する
     bpy.types.TOPBAR_MT_file_import.remove(menu_import)
     del bpy.types.Scene.mmd2gltf
     for c in reversed(classes):

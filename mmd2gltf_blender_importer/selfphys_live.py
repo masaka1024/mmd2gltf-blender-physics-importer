@@ -127,7 +127,16 @@ def start(context, arm, glb_path):
 
 
 def stop():
-    """止めてハンドルを閉じる。何度呼んでもよい (アドオンの unregister() からも呼ぶ)。"""
+    """止めてハンドルを閉じる。何度呼んでもよい (アドオンの unregister() からも呼ぶ)。
+    アーマチュアが残っていれば揺れ物ボーンの matrix_basis を単位に戻す
+    (保存した .blend に最後のシミュレーション姿勢が残らないように)。"""
+    if _nm is not None and _ctx is not None:
+        try:
+            arm = _find_armature()
+            if arm is not None and arm.type == "ARMATURE":
+                _write_reset(arm, _ctx)
+        except Exception:
+            pass
     _stop(remove_handlers=True)
 
 

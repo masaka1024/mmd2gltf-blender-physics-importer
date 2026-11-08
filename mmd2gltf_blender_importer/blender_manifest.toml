@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "mmd2gltf_blender_importer"
-version = "0.1.0"
+version = "0.2.0"
 name = "mmd2gltf Physics Importer"
 tagline = "mmd2gltf が出力した GLB の MMD 物理・トゥーン材質を Blender で再構築する"
 maintainer = "masaka1024"
@@ -9,6 +9,7 @@ type = "add-on"
 website = "https://github.com/masaka1024/mmd2gltf-blender-physics-importer"
 tags = ["Import-Export", "Physics", "Material"]
 blender_version_min = "4.2.0"
+platforms = ["macos-arm64", "windows-x64"]
 license = ["SPDX:MIT"]
 copyright = ["2026 masaka1024"]
 
