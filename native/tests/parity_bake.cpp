@@ -64,8 +64,8 @@ int main(int argc, char** argv)
 	const double Sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - T0).count();
 	std::printf("bones %d  frames %d  physics bones %zu  bake %.2fs\n", Sk.BoneCount, Frames, Bake.PhysicsBones.size(), Sec);
 
-	if (Bake.PhysicsBones.empty()) { std::fprintf(stderr, "FAIL: PhysicsBones is empty\n"); return 1; }
-	if (!Bake.NanBone.empty()) { std::fprintf(stderr, "FAIL: NaN bone '%s'\n", Bake.NanBone.c_str()); return 1; }
+	if (Bake.PhysicsBones.empty()) { std::fprintf(stderr, "FAIL: PhysicsBones is empty (%s)\n", Bake.Error.c_str()); return 1; }
+	if (Bake.NanSeen || !Bake.NanBone.empty()) { std::fprintf(stderr, "FAIL: NaN bone '%s'\n", Bake.NanBone.c_str()); return 1; }
 	if (static_cast<int>(Bake.BoneWorld.size()) != Frames) { std::fprintf(stderr, "FAIL: BoneWorld frames %zu\n", Bake.BoneWorld.size()); return 1; }
 
 	std::ifstream Csv(argv[2]);

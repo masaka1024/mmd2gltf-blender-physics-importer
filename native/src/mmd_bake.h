@@ -37,11 +37,21 @@ namespace mmdnative
 	{
 		std::vector<int> PhysicsBones;                       // 昇順
 		std::vector<std::vector<RigidTransform>> BoneWorld;  // [frame][bone] 全ボーン。物理ボーンを上書き済み
-		std::string NanBone;                                 // 空 = 発散なし
+		std::string NanBone;                                 // 最初に発散したボーン名 (名前が空なら "#<index>")
+		bool NanSeen = false;                                // 発散があったか (NanBone が空でも信頼できる)
+		std::string Error;                                   // 空 = 正常。早期 return の理由 (PhysicsBones も空)
 	};
 
-	// fk が空 (ComputeFk が循環で失敗) / 行数が times と合わない場合は空の結果 + NanBone 空 を返す
-	// (呼び出し側は PhysicsBones.empty() で判定する)。progress(frame, frames) は null 可。
+	// 物理ボーン 1 本の出力 world を決める共通規則 (RunBake / ライブ step で共用)。
+	// aligned は ComputeAlignedBonePoses の結果 (needAligned が false なら空でよい)。
+	RigidTransform ResolvePhysicsBoneWorld(const MmdPhysics::BoneLink& link, const TArray<TOptional<RigidTransform>>& aligned,
+	                                       bool needAligned, const PlaybackSettings& opt);
+	// 物理ボーン = BoneFollow でない剛体が紐づくボーン。nb 未満のものを昇順で返す。
+	std::vector<int> CollectPhysicsBones(const MmdPhysics::PmxPhysicsBuilder& builder, int nb);
+	bool IsFiniteTransform(const RigidTransform&);
+
+	// model が null / fk が空 (ComputeFk が循環で失敗) / 行数が times と合わない / Build 失敗の場合は
+	// 空の結果 + Error を返す。progress(frame, frames) は null 可。
 	BakeResult RunBake(const std::shared_ptr<PmxPhysicsModel>& model,
 	                   const std::vector<std::vector<RigidTransform>>& fk,
 	                   const std::vector<float>& times,
