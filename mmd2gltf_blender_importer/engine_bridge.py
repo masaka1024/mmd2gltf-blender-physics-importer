@@ -143,6 +143,7 @@ class NativeModel:
             raise NativeError(_last_error() or "モデルを作成できません")
         self._h = h
         self._info = None
+        self.live_warning = None
         info = self._call_info()
         self._bones = info["bone_count"]
         self._frames = info["frame_count"]
@@ -214,15 +215,21 @@ class NativeModel:
 
     def live_reset(self, world_in):
         _check_len(world_in, self._bones * 7, "world_in")
+        self.live_warning = None
         if _lib.mmd_live_reset(self._handle(), _addr(world_in)) == MMD_ERR:
             raise NativeError(_last_error())
 
     def live_step(self, world_in, dt):
+        """1 ステップ進める。戻り値 array('f') [bone][7]。
+
+        発散 (MMD_WARN_NAN) のときは例外にせず、self.live_warning に警告文
+        ("... first at bone: <名前>; ...") を入れる (それ以外は None)。"""
         _check_len(world_in, self._bones * 7, "world_in")
         out = array("f", [0.0]) * len(world_in)
         rc = _lib.mmd_live_step(self._handle(), _addr(world_in), float(dt), _addr(out))
         if rc == MMD_ERR:
             raise NativeError(_last_error())
+        self.live_warning = _last_error() if rc == MMD_WARN_NAN else None
         return out
 
     def close(self):

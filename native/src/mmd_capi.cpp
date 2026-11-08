@@ -341,18 +341,32 @@ MMD_API int32_t mmd_live_step(MmdHandle* h, const float* in, float dt, float* ou
 
 		std::memmove(out, in, static_cast<size_t>(nb) * 7 * sizeof(float));   // out == in を許す
 		bool nan = false;
+		std::string nanBone;
 		for (const BoneLink& link : builder.BoneLinks)
 		{
 			if (link.Mode == EPhysicsMode::BoneFollow) continue;
 			const int bi = link.BoneIndex;
 			if (bi < 0 || bi >= nb) continue;
 			RigidTransform w = ResolvePhysicsBoneWorld(link, aligned, h->NeedAligned, h->Settings);
-			if (!IsFiniteTransform(w)) { nan = true; w = h->LastOut[bi]; }
+			if (!IsFiniteTransform(w))
+			{
+				if (!nan)
+				{
+					nanBone = bi < static_cast<int>(h->Sk.Names.size()) ? h->Sk.Names[bi] : std::string();
+					if (nanBone.empty()) nanBone = "#" + std::to_string(bi);
+				}
+				nan = true;
+				w = h->LastOut[bi];
+			}
 			h->LastOut[bi] = w;
 			Pack(w, out + static_cast<size_t>(bi) * 7);
 		}
 		// 非物理ボーンは入力をそのまま保持 (次回 NaN 時の基準としても使えるよう更新はしない)
-		if (nan) { SetError("physics diverged (NaN); previous pose kept for affected bones"); return MMD_WARN_NAN; }
+		if (nan)
+		{
+			SetError("physics diverged (NaN) first at bone: " + nanBone + "; previous pose kept for affected bones");
+			return MMD_WARN_NAN;
+		}
 		return MMD_OK;
 	});
 }

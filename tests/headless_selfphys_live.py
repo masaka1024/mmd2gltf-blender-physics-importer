@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import traceback
+from array import array
 
 import bpy
 
@@ -25,6 +26,23 @@ FRAMES = list(range(1, 61))
 def _quat_angle(a, b):
     dq = a.normalized().rotation_difference(b.normalized())
     return 2.0 * math.asin(min(1.0, math.sqrt(dq.x * dq.x + dq.y * dq.y + dq.z * dq.z)))
+
+
+def _written_vs_native(arm, live, sb, phys_pairs, rest, scale):
+    """直近の live_step 出力と評価済み揺れ物ボーン行列の差 (位置, 回転)。Bone はその場で引く。"""
+    out = live._last_out
+    wp, wr = 0.0, 0.0
+    for bi, name in phys_pairs:
+        exp = sb.pmx_world_to_pose_matrix(out[bi * 7:bi * 7 + 7], rest[bi], arm.data.bones[name], scale)
+        got = arm.pose.bones[name].matrix
+        wp = max(wp, (got.translation - exp.translation).length)
+        wr = max(wr, _quat_angle(got.to_quaternion(), exp.to_quaternion()))
+    return wp, wr
+
+
+def _has_nan(arm, names):
+    return [n for n in names
+            if any(not math.isfinite(arm.pose.bones[n].matrix[r][c]) for r in range(4) for c in range(4))]
 
 
 def main():
@@ -60,6 +78,7 @@ def main():
         nm.close()
         pmx_bone, _ = sb.bone_map(arm, model, nb, scale)
         phys_names = [pmx_bone[bi].name for bi in phys if bi in pmx_bone]
+        phys_pairs = [(bi, pmx_bone[bi].name) for bi in phys if bi in pmx_bone]
 
         # --- 逆変換: blender_pose_to_pmx_world(pmx_world_to_pose_matrix(x)) ≈ x -----
         from mathutils import Quaternion, Vector
@@ -102,15 +121,8 @@ def main():
             live_pos[f] = {n: arm.pose.bones[n].matrix.translation.copy() for n in phys_names}
             if f > 1:
                 # 書いたポーズが同じフレームで native の出力どおりに評価されている (遅れ 0)
-                out = live._last_out
-                for bi in phys:
-                    b = pmx_bone.get(bi)
-                    if b is None:
-                        continue
-                    exp = sb.pmx_world_to_pose_matrix(out[bi * 7:bi * 7 + 7], rest[bi], b, scale)
-                    got = arm.pose.bones[b.name].matrix
-                    wp = max(wp, (got.translation - exp.translation).length)
-                    wr = max(wr, _quat_angle(got.to_quaternion(), exp.to_quaternion()))
+                a, b = _written_vs_native(arm, live, sb, phys_pairs, rest, scale)
+                wp, wr = max(wp, a), max(wr, b)
             for n in phys_names:
                 m = arm.pose.bones[n].matrix
                 if any(not math.isfinite(m[r][c]) for r in range(4) for c in range(4)):
@@ -186,6 +198,84 @@ def main():
         sc.frame_set(2)
         check("runs_after_remove_bake", live.is_running() and live._stats["steps"] > s_before["steps"],
               live._stats)
+        pmx_bone = None   # 以降は編集モードを出入りするので Bone 参照を持たない
+
+        # --- サブフレーム: リセットもステップもしない ----------------------
+        st0 = dict(live._stats)
+        sc.frame_set(2, subframe=0.5)
+        sc.frame_set(2, subframe=0.25)
+        st1 = dict(live._stats)
+        sc.frame_set(3)
+        check("subframe_no_reset", st1["resets"] == st0["resets"] and st1["steps"] == st0["steps"]
+              and live._stats["steps"] == st0["steps"] + 1 and live._stats["resets"] == st0["resets"],
+              {"before": [st0["resets"], st0["steps"]], "sub": [st1["resets"], st1["steps"]],
+               "after": [live._stats["resets"], live._stats["steps"]]})
+
+        # --- 編集モードの出入り ------------------------------------------
+        vl = bpy.context.view_layer
+        vl.objects.active = arm
+        arm.select_set(True)
+        rb0 = live._stats["rebuilds"]
+        bpy.ops.object.mode_set(mode="EDIT")
+        sc.frame_set(4)   # 編集中は何もしない
+        bpy.ops.object.mode_set(mode="OBJECT")
+        sc.frame_set(5)   # リセット
+        sc.frame_set(6)   # ステップ
+        sc.frame_set(7)
+        wp, wr = _written_vs_native(arm, live, sb, phys_pairs, rest, scale)
+        check("edit_mode_toggle", live.is_running() and live.last_error() is None
+              and not _has_nan(arm, phys_names) and wp < 1e-4 and wr < 1e-3,
+              {"running": live.is_running(), "error": live.last_error(), "rebuilds": live._stats["rebuilds"] - rb0,
+               "max_pos": wp, "max_rot": wr})
+        res["info_edit_mode_rebuilds"] = live._stats["rebuilds"] - rb0
+
+        # --- 改名 -------------------------------------------------------
+        arm.name = "ArmRenamedForLiveTest"
+        s0 = live._stats["steps"]
+        sc.frame_set(8)
+        check("rename_keeps_running", live.is_running() and live._stats["steps"] == s0 + 1
+              and live._arm_name == "ArmRenamedForLiveTest", {"steps": [s0, live._stats["steps"]],
+                                                               "name": live._arm_name})
+
+        # --- start() の失敗を呼び出し側に伝える --------------------------
+        orig_reset = eb.NativeModel.live_reset
+
+        def bad_reset(self, w):
+            raise eb.NativeError("test: reset failed")
+        eb.NativeModel.live_reset = bad_reset
+        raised = None
+        try:
+            live.start(bpy.context, arm, glb)
+        except Exception as e:
+            raised = "%s: %s" % (type(e).__name__, e)
+        finally:
+            eb.NativeModel.live_reset = orig_reset
+        check("start_failure_raises", raised is not None and "reset failed" in raised and not live.is_running(),
+              raised)
+
+        # --- 発散の警告: native が最初のボーン名を返す ---------------------
+        nm2 = eb.NativeModel(glb)
+        w = array("f", [v for r7 in rest for v in r7])
+        nm2.live_reset(w)
+        bad = array("f", [float("nan")] * len(w))
+        nm2.live_step(bad, 1.0 / 24)
+        warn = nm2.live_warning
+        nm2.close()
+        check("nan_warning_has_bone", warn is not None and "first at bone:" in warn, warn)
+
+        # --- 削除 -------------------------------------------------------
+        live.start(bpy.context, arm, glb)
+        sc.frame_set(9)
+        bpy.data.objects.remove(arm, do_unlink=True)
+        arm = None
+        sc.frame_set(10)
+        check("delete_stops", not live.is_running() and live.last_error() is not None, live.last_error())
+        bpy.ops.import_scene.gltf(filepath=glb, bone_heuristic="TEMPERANCE")
+        arm2 = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
+        live.start(bpy.context, arm2, glb)
+        sc.frame_set(1)
+        sc.frame_set(2)
+        check("running_before_reopen", live.is_running())
         bpy.ops.wm.read_factory_settings(use_empty=True)
         check("reopen_stops", not live.is_running())
         bpy.context.scene.frame_set(5)

@@ -55,8 +55,14 @@ def _pmx_quat_matrix(q7):
 
 def pmx_world_to_pose_matrix(world7, rest7, bone, scale):
     """native のワールド姿勢 (PMX raw 7 値) → アーマチュア空間のポーズ行列 (4x4)。"""
+    return pmx_world_to_pose_matrix_l3(world7, rest7, bone.matrix_local.to_3x3().normalized(), scale)
+
+
+def pmx_world_to_pose_matrix_l3(world7, rest7, local3, scale):
+    """pmx_world_to_pose_matrix の行列版。local3 = bone.matrix_local.to_3x3().normalized()。
+    Bone を持ち越せない場面 (リアルタイム表示: 編集モードで Bone が作り直される) で使う。"""
     rel = _pmx_quat_matrix(world7) @ _pmx_quat_matrix(rest7).transposed()
-    rot = mm.P3 @ rel @ mm.P3 @ bone.matrix_local.to_3x3().normalized()
+    rot = mm.P3 @ rel @ mm.P3 @ local3
     m = rot.to_4x4()
     m.translation = mm.pmx_pos_to_blender(world7[:3], scale)
     return m

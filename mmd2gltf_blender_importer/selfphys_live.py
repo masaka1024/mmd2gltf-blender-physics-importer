@@ -24,6 +24,15 @@
 #   「MMD Physics Bake」の NLA 段がある間は何もしない (selfphys_bake.has_bake)。
 #   例外は 1 回だけ警告して止める。ファイル読み込み (load_pre) とアドオン無効化 (stop) で
 #   native のハンドルを閉じる。状態はモジュール変数に持つ (Blender のデータに保存しない)。
+#
+#   Bone (非 ID の StructRNA) はフレームをまたいで持たない。編集モードの出入りや
+#   アンドゥで Bone 集合が作り直されると、持ち越した参照は解放済みメモリを指すため。
+#   開始時に matrix_local と親の名前を .copy() で控え、アーマチュアは session_uid で
+#   引き直す (改名にも追従)。Bone 集合が作り直されたら (簡易シグネチャで検出) 控えを作り直す。
+#
+#   サブフレーム (モーションブラー、frame_set(f, subframe=x)) は何もしない
+#   (リセットもステップもしない。直前の整数フレームの書き込みがそのまま見える)。
+#   発散 (NaN) は native が直前の姿勢を保持するので、最初のボーン名を 1 回だけ警告して続ける。
 # ===========================================================================
 import math
 import sys
@@ -37,15 +46,19 @@ from mathutils import Matrix
 from . import engine_bridge, glb_reader, mmd_math as mm
 from . import selfphys_bake as sb
 
+
 # --- 状態 (モジュール変数) ---
 _nm = None            # engine_bridge.NativeModel
+_model = None         # glb_reader のモデル (控えの作り直しに使う)
 _arm_name = None
+_arm_uid = None       # arm.session_uid
 _last_frame = None    # 直前に処理したフレーム (None = 次は必ずリセット)
-_ctx = None           # 開始時に作るボーン対応などのキャッシュ
+_ctx = None           # ボーン対応・行列の控え (Bone 参照は持たない)
 _in_handler = False   # 再入ガード
 _last_error = None    # 直近の停止理由 (Task 11 の UI 表示用)
+_last_warning = None  # 直近の発散警告 (1 回だけ出す)
 _last_out = None      # 直近の live_step の出力 (テスト用)
-_stats = {"resets": 0, "steps": 0, "handler_seconds": 0.0, "handler_calls": 0}
+_stats = {"resets": 0, "steps": 0, "rebuilds": 0, "handler_seconds": 0.0, "handler_calls": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -56,9 +69,13 @@ def blender_pose_to_pmx_world(pose_matrix, rest7, bone, scale):
 
     順変換: rot = P · (R_world · R_rest⁻¹) · P · L  (L = bone.matrix_local の 3x3)
     逆変換: R_world = P · rot · L⁻¹ · P · R_rest  (P は自己逆、L は回転なので L⁻¹ = Lᵀ)"""
+    return blender_pose_to_pmx_world_l3(pose_matrix, rest7, bone.matrix_local.to_3x3().normalized(), scale)
+
+
+def blender_pose_to_pmx_world_l3(pose_matrix, rest7, local3, scale):
+    """blender_pose_to_pmx_world の行列版。local3 = bone.matrix_local.to_3x3().normalized()。"""
     rot = pose_matrix.to_3x3().normalized()
-    l3 = bone.matrix_local.to_3x3().normalized()
-    rel = mm.P3 @ rot @ l3.transposed() @ mm.P3
+    rel = mm.P3 @ rot @ local3.transposed() @ mm.P3
     w = rel @ sb._pmx_quat_matrix(rest7)
     q = w.to_quaternion()
     t = pose_matrix.translation
@@ -76,24 +93,37 @@ def last_error():
     return _last_error
 
 
+def last_warning():
+    return _last_warning
+
+
 def start(context, arm, glb_path):
-    """リアルタイム表示を始める (既に動いていれば止めてから)。失敗時は NativeError 等を投げる。"""
-    global _nm, _arm_name, _last_frame, _ctx, _last_error
+    """リアルタイム表示を始める (既に動いていれば止めてから)。
+
+    失敗時は例外を投げる (モデル読み込みは NativeError 等、最初のフレームの処理で
+    止まった場合は RuntimeError(理由))。正常に戻れば is_running() は True。"""
+    global _nm, _model, _arm_name, _arm_uid, _last_frame, _ctx, _last_error, _last_warning
     stop()
     path = bpy.path.abspath(glb_path)
     nm = engine_bridge.NativeModel(path)
     try:
-        ctx = _build_context(arm, nm, glb_reader.load(path))
+        model = glb_reader.load(path)
+        ctx = _build_context(arm, nm, model)
     except BaseException:
         nm.close()
         raise
-    _nm, _arm_name, _ctx = nm, arm.name, ctx
+    _nm, _model, _ctx = nm, model, ctx
+    _arm_name, _arm_uid = arm.name, arm.session_uid
     _last_frame = None
     _last_error = None
+    _last_warning = None
     _add_handler(bpy.app.handlers.frame_change_post, _on_frame_change)
     _add_handler(bpy.app.handlers.load_pre, _on_load_pre)
     # 現在のフレームをすぐ反映する (リセット)
     _on_frame_change(context.scene, None)
+    if not is_running():
+        stop()
+        raise RuntimeError(_last_error or "リアルタイム物理を開始できませんでした")
 
 
 def stop():
@@ -118,9 +148,9 @@ def _stop(remove_handlers):
     """ハンドラ実行中に呼ぶときは remove_handlers=False にする (Blender がハンドラ一覧を
     添字で回しているため、実行中に取り除くと他のアドオンのハンドラが 1 つ飛ばされる)。
     残ったハンドラは _nm が None なので何もしない。"""
-    global _nm, _arm_name, _last_frame, _ctx
+    global _nm, _model, _arm_name, _arm_uid, _last_frame, _ctx
     nm, _nm = _nm, None
-    _arm_name, _last_frame, _ctx = None, None, None
+    _model, _arm_name, _arm_uid, _last_frame, _ctx = None, None, None, None, None
     if nm is not None:
         try:
             nm.close()
@@ -131,6 +161,16 @@ def _stop(remove_handlers):
         _remove_handler(bpy.app.handlers.load_pre, _on_load_pre)
 
 
+def _bones_signature(arm):
+    """Bone 集合が作り直されたか (編集モード・アンドゥ) を安く見分ける。
+    Bone の構造体アドレスは作り直しで変わる。ここで触る Bone はその場で引いたものだけ。"""
+    bones = arm.data.bones
+    n = len(bones)
+    if n == 0:
+        return (arm.data.session_uid, 0)
+    return (arm.data.session_uid, n, bones[0].as_pointer(), bones[n - 1].as_pointer())
+
+
 def _build_context(arm, nm, model):
     info = nm.info
     nb = info["bone_count"]
@@ -138,12 +178,13 @@ def _build_context(arm, nm, model):
     rest = nm.rest_world()
     pmx_bone, blender_to_pmx = sb.bone_map(arm, model, nb, scale)
     phys = set(nm.physics_bones)
-    # 入力: (pmx index, Blender 名, Bone, rest7)。対応の無い index は静止姿勢のまま渡す。
-    inputs = [(bi, b.name, b, rest[bi]) for bi, b in sorted(pmx_bone.items())]
+    # 入力: (pmx index, Blender 名, local3, rest7)。対応の無い index は静止姿勢のまま渡す。
+    inputs = [(bi, b.name, b.matrix_local.to_3x3().normalized(), rest[bi])
+              for bi, b in sorted(pmx_bone.items())]
     world_in = array("f", [0.0]) * (nb * 7)
     for bi in range(nb):
         world_in[bi * 7:bi * 7 + 7] = array("f", rest[bi])
-    # 出力: 揺れ物ボーン (Blender 名, pmx index, Bone, rest7, rest⁻¹, 親の情報)
+    # 出力: 揺れ物ボーン。行列はすべてコピー (Bone 参照は残さない)。
     outputs = []
     for bi in sorted(phys):
         b = pmx_bone.get(bi)
@@ -152,13 +193,28 @@ def _build_context(arm, nm, model):
         par = b.parent
         pi = blender_to_pmx.get(par.name) if par is not None else None
         outputs.append({
-            "name": b.name, "bi": bi, "bone": b, "rest7": rest[bi],
+            "name": b.name, "bi": bi, "rest7": rest[bi],
+            "local3": b.matrix_local.to_3x3().normalized(),
             "rest_inv": b.matrix_local.inverted(),
             "parent": par.name if par is not None else None,
             "parent_bi": pi if pi in phys else None,   # 親も揺れ物ならその native 出力を使う
             "parent_rest": par.matrix_local.copy() if par is not None else None,
         })
-    return {"nb": nb, "scale": scale, "inputs": inputs, "outputs": outputs, "world_in": world_in}
+    return {"nb": nb, "scale": scale, "inputs": inputs, "outputs": outputs, "world_in": world_in,
+            "sig": _bones_signature(arm)}
+
+
+def _find_armature():
+    """記録した session_uid のアーマチュア。改名されていれば名前を更新する。無ければ None。"""
+    global _arm_name
+    obj = bpy.data.objects.get(_arm_name) if _arm_name else None
+    if obj is not None and obj.session_uid == _arm_uid:
+        return obj
+    for o in bpy.data.objects:
+        if o.session_uid == _arm_uid:
+            _arm_name = o.name
+            return o
+    return None
 
 
 def _warn_and_stop(msg):
@@ -172,18 +228,21 @@ def _read_input(ctx, arm_eval):
     buf = ctx["world_in"]
     scale = ctx["scale"]
     pbs = arm_eval.pose.bones
-    for bi, name, bone, rest7 in ctx["inputs"]:
+    for bi, name, local3, rest7 in ctx["inputs"]:
         pb = pbs.get(name)
         if pb is None:
             continue
-        buf[bi * 7:bi * 7 + 7] = array("f", blender_pose_to_pmx_world(pb.matrix, rest7, bone, scale))
+        buf[bi * 7:bi * 7 + 7] = array("f", blender_pose_to_pmx_world_l3(pb.matrix, rest7, local3, scale))
     return buf
 
 
 def _write_reset(arm, ctx):
     ident = Matrix.Identity(4)
+    pbs = arm.pose.bones
     for o in ctx["outputs"]:
-        arm.pose.bones[o["name"]].matrix_basis = ident
+        pb = pbs.get(o["name"])
+        if pb is not None:
+            pb.matrix_basis = ident
 
 
 def _write_step(arm, arm_eval, ctx, out):
@@ -194,20 +253,25 @@ def _write_step(arm, arm_eval, ctx, out):
         w7 = out[bi * 7:bi * 7 + 7]
         if not all(math.isfinite(v) for v in w7):
             continue   # native は NaN 時に直前の姿勢を返すので通常来ない
-        poses[bi] = sb.pmx_world_to_pose_matrix(w7, o["rest7"], o["bone"], scale)
+        poses[bi] = sb.pmx_world_to_pose_matrix_l3(w7, o["rest7"], o["local3"], scale)
     epbs = arm_eval.pose.bones
+    pbs = arm.pose.bones
     for o in ctx["outputs"]:
         pose = poses.get(o["bi"])
-        if pose is None:
+        pb = pbs.get(o["name"])
+        if pose is None or pb is None:
             continue
         if o["parent"] is None:
             basis = o["rest_inv"] @ pose
         else:
             pp = poses.get(o["parent_bi"]) if o["parent_bi"] is not None else None
             if pp is None:
-                pp = epbs[o["parent"]].matrix   # 揺れ物でない親 = このフレームの評価済み姿勢
+                epb = epbs.get(o["parent"])
+                if epb is None:
+                    continue
+                pp = epb.matrix   # 揺れ物でない親 = このフレームの評価済み姿勢
             basis = o["rest_inv"] @ o["parent_rest"] @ _rigid_inverted(pp) @ pose
-        arm.pose.bones[o["name"]].matrix_basis = basis
+        pb.matrix_basis = basis
 
 
 def _rigid_inverted(m):
@@ -217,24 +281,38 @@ def _rigid_inverted(m):
     return out
 
 
+def _is_subframe(scene):
+    ff = scene.frame_current_final
+    return abs(ff - round(ff)) > 1e-6
+
+
 @persistent
 def _on_frame_change(scene, depsgraph=None):
-    global _in_handler, _last_frame, _last_out
+    global _in_handler, _last_frame, _last_out, _ctx, _last_warning
     if _in_handler or _nm is None:
         return
     _in_handler = True
     t0 = time.perf_counter()
     try:
-        arm = bpy.data.objects.get(_arm_name) if _arm_name else None
+        arm = _find_armature()
         if arm is None or arm.type != "ARMATURE":
             _warn_and_stop("アーマチュア '%s' が見つかりません" % _arm_name)
             return
         if scene.objects.get(arm.name) is None:
             return   # 別のシーンのフレーム変更
+        if arm.mode == "EDIT":
+            _last_frame = None   # 編集中のポーズは使えない。抜けたらリセットから
+            return
+        if _is_subframe(scene):
+            return   # サブフレームはリセットもステップもしない
         if sb.has_bake(arm):
             _last_frame = None   # ベイクを消したら次のフレームでリセットする
             return
         ctx = _ctx
+        if ctx["sig"] != _bones_signature(arm):
+            ctx = _ctx = _build_context(arm, _nm, _model)
+            _stats["rebuilds"] += 1
+            _last_frame = None
         if depsgraph is None:
             depsgraph = bpy.context.evaluated_depsgraph_get()
         arm_eval = arm.evaluated_get(depsgraph)
@@ -244,6 +322,10 @@ def _on_frame_change(scene, depsgraph=None):
             r = scene.render
             dt = r.fps_base / r.fps
             out = _nm.live_step(world_in, dt)
+            if _nm.live_warning and _last_warning is None:
+                _last_warning = _nm.live_warning
+                print("mmd2gltf: 警告: 物理が発散しました (直前の姿勢を保持): " + _last_warning,
+                      file=sys.stderr)
             _write_step(arm, arm_eval, ctx, out)
             _last_out = out
             _stats["steps"] += 1
