@@ -80,3 +80,32 @@ add_test(NAME parity_engine
           "$<TARGET_FILE:parity_engine>")
 set_tests_properties(parity_engine PROPERTIES
   ENVIRONMENT "MMD_TEST_GLB_SMALL=${MMD_TEST_GLB_SMALL}" TIMEOUT 600)
+
+# --- 層 3: FK のビット一致 (C# physbake の --dump-fk と比較) ---
+set(MMD_TEST_GLB "$ENV{MMD_TEST_GLB}" CACHE FILEPATH "Large test GLB (never committed)")
+if(NOT MMD_TEST_GLB)
+  set(MMD_TEST_GLB "/Users/masaka1024/Downloads/IA 2/IA.glb")
+endif()
+add_library(mmdnative STATIC src/mmd_glb.cpp src/mmd_fk.cpp)
+target_link_libraries(mmdnative PUBLIC mmdphys_core)
+target_include_directories(mmdnative PUBLIC src)
+mmdphys_fp_flags(mmdnative)
+
+add_executable(parity_fk tests/parity_fk.cpp)
+target_link_libraries(parity_fk PRIVATE mmdnative)
+target_include_directories(parity_fk PRIVATE tests)
+mmdphys_fp_flags(parity_fk)
+
+# 基準 CSV (<name>.fk.csv / <name>.bake.csv) は make_ref_bake.sh で build 配下に作る (Task 6 も .bake.csv を使う)。
+function(mmdphys_add_bake_parity tag glb)
+  set(prefix "${CMAKE_CURRENT_BINARY_DIR}/ref/${tag}")
+  add_test(NAME ref_bake_${tag}
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_ref_bake.sh" "${glb}" "${prefix}")
+  set_tests_properties(ref_bake_${tag} PROPERTIES
+    FIXTURES_SETUP ref_bake_${tag} RESOURCE_LOCK physbake_build TIMEOUT 900)
+  add_test(NAME parity_fk_${tag} COMMAND parity_fk "${glb}" "${prefix}.fk.csv")
+  set_tests_properties(parity_fk_${tag} PROPERTIES FIXTURES_REQUIRED ref_bake_${tag} TIMEOUT 600
+    ENVIRONMENT "MMD_TEST_GLB_SMALL=${MMD_TEST_GLB_SMALL};MMD_TEST_GLB=${MMD_TEST_GLB}")
+endfunction()
+mmdphys_add_bake_parity(small "${MMD_TEST_GLB_SMALL}")
+mmdphys_add_bake_parity(big "${MMD_TEST_GLB}")
