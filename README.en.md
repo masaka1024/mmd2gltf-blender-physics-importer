@@ -70,7 +70,9 @@ The panel has three buttons. All need a target armature and its GLB path (record
 | **ベイクを削除** (Delete bake) | Removes the "MMD Physics Bake" track and its action |
 | **リアルタイム表示** (Real-time display) | Computes physics on every frame change and moves the secondary-motion bones (press again to stop) |
 
-**Pre-baked GLBs:** if the active action already has keys on the secondary-motion bones, Blender would evaluate it above the NLA and hide the bake. While a bake exists, the add-on therefore mutes those bones' fcurves in the active action (keys are never modified). *ベイクを削除* restores them.
+**Pre-baked GLBs:** if the active action already has keys on the secondary-motion bones, Blender would evaluate it above the NLA and hide the bake. While a bake exists, the add-on therefore mutes those bones' fcurves in the active action (keys are never modified). *ベイクを削除* restores them. If that action was renamed or unassigned so it cannot be found, a warning is shown; rename it back and press *ベイクを削除* again.
+
+**Armatures already wired for Blender Bullet:** the wiring's bone constraints override the bake and the real-time display, so a warning is shown and the panel offers *物理を削除* (Remove physics) — press it first. Switching the engine to Blender Bullet stops the real-time display.
 
 - **Bake conditions**: the Unity / UE5 playback settings (step 1/60 × 2, solver iterations 10, joint-velocity iterations 40, ...)
   plus the UE5 node's write-back settings (mode-2 alignment, rotation clamp 0.5). The procedure is the same as physbake
@@ -117,7 +119,8 @@ a perfectly straight leg (the same problem MMD solves with its knee special case
 
 - Blender 4.2 or later (developed on 5.2 LTS) with the bundled glTF importer enabled
 - A `.glb` converted by `mmd2gltf-gui` (or `mmd2gltf-cs`)
-- For the native engine: macOS (Apple Silicon); the library ships in the zip. Windows (x64) is planned via CI and not bundled yet
+- For the native engine: macOS 11.2 or later (Apple Silicon); the library ships in the zip. Windows (x64) is planned via CI and not bundled yet.
+  Where the library is absent (Intel Mac, Linux, Windows for now) the add-on still installs, shows the reason in the panel and uses Blender Bullet
 - Optional: `toon01.bmp`–`toon10.bmp` from the MMD distribution for shared toons
 
 ## Install
@@ -127,7 +130,8 @@ Build a zip with `tools/build_zip.sh` and install it from *Edit > Preferences > 
 **macOS note**: the native library (`native_lib/libmmdphys.dylib`) is ad-hoc signed and not notarized. Installing through
 Blender's *Install from Disk* is fine: extraction the way Blender does it leaves no quarantine attribute (verified by simulating with Python zipfile; GUI install not yet tried). But if you extract a browser-downloaded zip with Finder and copy the
 resulting **folder** into the extensions folder by hand, the quarantine attribute can remain and the library fails to load.
-The panel shows the reason; run `xattr -d com.apple.quarantine <path to libmmdphys.dylib>` in a terminal.
+The panel shows the reason; run `xattr -d com.apple.quarantine <path to libmmdphys.dylib>` in a terminal, then restart Blender
+(or disable and re-enable the add-on) — the load result is cached for the session.
 
 ## Usage
 
@@ -178,6 +182,8 @@ The native engine is not affected by these (the same engine as Unity / UE5 compu
 The native engine library is built from `native/` (CMake). The distributed zip already contains a prebuilt one, so this is only needed for development.
 
 ```bash
+cp native/tests/local_env.example.sh native/tests/local_env.sh   # edit the paths (not committed)
+source native/tests/local_env.sh
 cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
 cmake --build native/build
 ctest --test-dir native/build
@@ -187,7 +193,18 @@ cmake --install native/build     # copies into mmd2gltf_blender_importer/native_
 - Build in **Release** and never use `-ffast-math` / `-Ofast` / `/fp:fast` (results would drift from the C# engine; CMake sets `-ffp-contract=off` / `/fp:precise`).
 - `ctest` includes the bit-exact parity tests against the C# reference (layers 2-4). Put the sibling repositories next to this one:
   `mmd2gltf-ue5-physics-importer` (sync check of `native/vendor/MmdPhysicsCore`) and `mmd2gltf-cs` (physbake produces the reference CSVs; needs the .NET SDK).
-  Test GLBs are passed via `MMD_TEST_GLB_SMALL` / `MMD_TEST_GLB` (large) / `MMD_TEST_GLB_NOEXTRAS` / `MMD_TEST_GLB_NOANIM` (never committed). Use `-DMMD_UE5_CORE_DIR=...` if the UE5 repo is elsewhere.
+  If they live elsewhere set `MMD_UE5_REPO` / `MMD_CS_REPO` and `-DMMD_UE5_CORE_DIR=...`.
+  Test GLBs are passed via environment variables set before configuring (never committed; see `native/tests/local_env.example.sh`).
+  A test whose variable is unset fails with a message saying so.
+
+  | Variable | Contents | Used by |
+  |---|---|---|
+  | `MMD_TEST_GLB_SMALL` | small animated GLB | test_load / parity_engine / *_small / capi, headless tests |
+  | `MMD_TEST_GLB` | large animated GLB | *_big |
+  | `MMD_TEST_GLB_NOEXTRAS` | GLB without extras.mmd | capi |
+  | `MMD_TEST_GLB_NOANIM` | GLB without animation | capi |
+  | `MMD_TEST_GLB_PREBAKED` | GLB with physics already baked into its keys | `tests/headless_selfphys_override.py` |
+- The minimum macOS is 11.2 (`CMAKE_OSX_DEPLOYMENT_TARGET`, matching Blender 4.2). For an existing build directory, recreate it or pass `-DCMAKE_OSX_DEPLOYMENT_TARGET=11.2`.
 - On Windows build with Visual Studio (MSVC); `bash` (Git for Windows) is required.
 - To use a library you built elsewhere, set the environment variable `MMD_NATIVE_LIB` to its full path.
 
@@ -216,6 +233,8 @@ tools/build_zip.sh     builds the distribution zip
 ```bash
 /Applications/Blender.app/Contents/MacOS/Blender -b -P tests/run_headless.py -- model.glb 60
 ```
+
+The native-engine parts are checked by `tests/headless_*.py` (pass the GLB as an argument or via the variables above).
 
 ## License
 

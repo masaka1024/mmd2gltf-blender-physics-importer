@@ -29,8 +29,14 @@
 #   揺れ物ボーンの fcurve (焼き込み済み GLB など) があるとベイクが隠れるので、
 #   ベイクがある間は、その揺れ物ボーンの変換 fcurve だけを mute する (キーは触らない)。
 #   mute した fcurve (アクション名 + スロット + data_path + index) はアーマチュアの
-#   ID プロパティ PROP_MUTED に JSON で記録し、remove_bake / 再ベイクで、
-#   まだ mute のままのものだけ戻す。結果の "overridden_bones" は従来どおり返す。
+#   ID プロパティ PROP_MUTED に JSON (記録のリスト) で記録し、remove_bake / 再ベイクで、
+#   まだ mute のままのものだけ戻す。アクションを名前で引けないとき (改名) は、
+#   アーマチュアのアクティブなアクションに記録の data_path があればそれを使う。
+#   それでも見つからなければ記録を残して WARNING を出す (名前を戻せば次の remove_bake で戻る)。
+#   結果の "overridden_bones" は従来どおり返す。
+#
+#   Blender Bullet の配線 (physics_builder のボーン拘束) が残っていると、拘束が NLA より
+#   後に評価されてベイクを上書きするので、ベイク時に WARNING を出す。
 # ===========================================================================
 import json
 import time
@@ -229,6 +235,26 @@ def _active_slot_identifier(action, arm):
     return slot.identifier
 
 
+def _muted_records(arm):
+    """PROP_MUTED の記録のリスト (旧形式の 1 件 dict も受ける)。壊れていれば []。"""
+    raw = arm.get(PROP_MUTED)
+    if raw is None:
+        return []
+    try:
+        rec = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    recs = rec if isinstance(rec, list) else [rec]
+    return [r for r in recs if isinstance(r, dict)]
+
+
+def _set_muted_records(arm, recs):
+    if recs:
+        arm[PROP_MUTED] = json.dumps(recs)
+    elif PROP_MUTED in arm:
+        del arm[PROP_MUTED]
+
+
 def _mute_physics_curves(arm, names):
     """アクティブなアクションの、names のボーンの変換 fcurve を mute して記録する。戻り値 = 件数。"""
     ad = arm.animation_data
@@ -247,28 +273,55 @@ def _mute_physics_curves(arm, names):
                 items.append([dp, fc.array_index])
                 break
     if items:
-        arm[PROP_MUTED] = json.dumps({"action": act.name, "slot": _active_slot_identifier(act, arm),
-                                      "curves": items})
+        recs = _muted_records(arm)   # 戻せなかった古い記録 (改名など) は残す
+        recs.append({"action": act.name, "slot": _active_slot_identifier(act, arm), "curves": items})
+        _set_muted_records(arm, recs)
     return len(items)
 
 
-def _unmute_physics_curves(arm):
-    """記録した fcurve のうち、まだ mute のままのものを戻す。記録は消す。戻り値 = 戻した数。"""
-    raw = arm.get(PROP_MUTED)
-    if raw is None:
+def _record_fcurves(arm, rec, want):
+    """記録のアクションの fcurve 一覧。名前で引けなければ、アーマチュアのアクティブな
+    アクションに記録の data_path があればそれを使う。見つからなければ None。"""
+    act = bpy.data.actions.get(rec.get("action") or "")
+    if act is not None:
+        return _slot_fcurves(act, rec.get("slot"))
+    ad = arm.animation_data
+    act = ad.action if ad is not None else None
+    if act is None:
+        return None
+    fcs = _slot_fcurves(act, rec.get("slot")) or action_fcurves(act, arm)
+    if any((fc.data_path, fc.array_index) in want for fc in fcs):
+        return fcs
+    return None
+
+
+def _unmute_physics_curves(arm, report=None):
+    """記録した fcurve のうち、まだ mute のままのものを戻す。戻り値 = 戻した数。
+
+    アクションを解決できた記録は消す。解決できない記録 (アクションの改名・削除) は残し、
+    report があれば WARNING を出す。"""
+    if arm.get(PROP_MUTED) is None:
         return 0
-    del arm[PROP_MUTED]
-    try:
-        rec = json.loads(raw)
-        act = bpy.data.actions.get(rec["action"])
-        want = {(dp, int(i)) for dp, i in rec["curves"]}
-    except (ValueError, KeyError, TypeError):
-        return 0
+    keep = []
     n = 0
-    for fc in _slot_fcurves(act, rec.get("slot")):
-        if fc.mute and (fc.data_path, fc.array_index) in want:
-            fc.mute = False
-            n += 1
+    for rec in _muted_records(arm):
+        try:
+            want = {(dp, int(i)) for dp, i in rec["curves"]}
+        except (KeyError, TypeError, ValueError):
+            continue   # 壊れた記録は捨てる
+        fcs = _record_fcurves(arm, rec, want)
+        if fcs is None:
+            keep.append(rec)
+            if report is not None:
+                report("WARNING", f"mute したアクション '{rec.get('action')}' が見つからないため、"
+                                  f"fcurve {len(want)} 本の mute を戻せません "
+                                  "(アクション名を戻してからベイクを削除すると戻ります)")
+            continue
+        for fc in fcs:
+            if fc.mute and (fc.data_path, fc.array_index) in want:
+                fc.mute = False
+                n += 1
+    _set_muted_records(arm, keep)
     return n
 
 
@@ -330,9 +383,10 @@ def has_bake(arm):
     return ad is not None and ad.nla_tracks.get(BAKE_TRACK_NAME) is not None
 
 
-def remove_bake(arm):
-    """ベイクの NLA トラックとアクションを消す。何か消したら True。"""
-    removed = _unmute_physics_curves(arm) > 0
+def remove_bake(arm, report=None):
+    """ベイクの NLA トラックとアクションを消し、mute した fcurve を戻す。何か消したら True。
+    report(level, msg) を渡すと、戻せない mute の記録があるとき WARNING を出す。"""
+    removed = _unmute_physics_curves(arm, report) > 0
     ad = arm.animation_data
     actions = set()
     if ad is not None:
@@ -356,9 +410,14 @@ def bake(context, arm, glb_path, report, progress=None):
     """native で全フレームを焼き、揺れ物ボーンのキーを NLA に書く。
 
     report(level, msg)。progress(done, total) は native のベイク中に呼ばれる (任意)。
-    戻り値 {"frames", "bones", "skipped_bones", "nan_bone", "overridden_bones",
-    "seconds_native", "seconds_write"}。"""
+    戻り値 {"frames", "bones", "skipped_bones", "nan_bone" (発散した最初のボーン名 | None),
+    "overridden_bones", "muted_curves", "seconds_native", "seconds_write"}
+    (アニメの無い GLB では seconds_* は無い)。
+    書き込み中に例外が出たら途中までの結果を remove_bake で消してから投げ直す。"""
     scene = context.scene
+    wired = physics_builder.bullet_constrained_bones(arm)
+    if wired:
+        report("WARNING", physics_builder.BULLET_WIRING_WARNING.format(n=len(wired)))
     model = glb_reader.load(bpy.path.abspath(glb_path))
     scale = model.unit_scale
 
@@ -366,7 +425,8 @@ def bake(context, arm, glb_path, report, progress=None):
     try:
         info = nm.info
         nb, nf = info["bone_count"], info["frame_count"]
-        result = {"frames": nf, "bones": 0, "skipped_bones": [], "nan_bone": None, "overridden_bones": []}
+        result = {"frames": nf, "bones": 0, "skipped_bones": [], "nan_bone": None, "overridden_bones": [],
+                  "muted_curves": 0}
         if nf == 0:
             report("ERROR", "アニメの無い GLB はリアルタイム表示を使ってください")
             return result
@@ -375,12 +435,13 @@ def bake(context, arm, glb_path, report, progress=None):
         times = np.array(nm.times(), dtype=np.float64)
         t0 = time.perf_counter()
         arr, warn = nm.bake(progress=progress)
+        nan_bone = nm.last_nan_bone or warn
         result["seconds_native"] = round(time.perf_counter() - t0, 3)
     finally:
         nm.close()
     if warn:
-        result["nan_bone"] = warn
-        report("WARNING", f"物理が発散しました (最初の検出: ボーン '{warn}')")
+        result["nan_bone"] = nan_bone
+        report("WARNING", f"物理が発散しました (最初の検出: ボーン '{nan_bone}')")
 
     data = np.frombuffer(arr, dtype=np.float32).reshape(nf, nb, 7).astype(np.float64)
     fps = scene.render.fps / scene.render.fps_base
@@ -413,8 +474,21 @@ def bake(context, arm, glb_path, report, progress=None):
     result["overridden_bones"] = sorted(over)
 
     t0 = time.perf_counter()
-    remove_bake(arm)
-    result["muted_curves"] = 0
+    remove_bake(arm, report)
+    try:
+        _write_bake(arm, ad, data, rest, scale, xs, nf, targets, blender_to_pmx, names, over, result, report)
+    except BaseException:
+        try:
+            remove_bake(arm)   # 途中までのアクション・NLA・mute を残さない
+        except Exception:
+            pass
+        raise
+    result["seconds_write"] = round(time.perf_counter() - t0, 3)
+    return result
+
+
+def _write_bake(arm, ad, data, rest, scale, xs, nf, targets, blender_to_pmx, names, over, result, report):
+    """bake() の書き込み部 (アクション・fcurve・NLA・mute)。"""
     act, slot, cb = _new_bake_action(arm)
 
     pose_cache = {}
@@ -484,5 +558,3 @@ def bake(context, arm, glb_path, report, progress=None):
     if result["muted_curves"]:
         report("INFO", f"アクティブなアクションの揺れ物ボーン {len(over)} 本の fcurve "
                        f"{result['muted_curves']} 本を mute しました (ベイクを削除すると戻ります)")
-    result["seconds_write"] = round(time.perf_counter() - t0, 3)
-    return result

@@ -8,6 +8,7 @@
 # を再構築する。Unity 版 mmd2gltf-unity-physics-importer の Blender 移植。
 # ===========================================================================
 import os
+import textwrap
 
 import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty,
@@ -132,11 +133,26 @@ class MMD2GLTF_Preferences(bpy.types.AddonPreferences):
         self.layout.prop(self, "shared_toon_dir")
 
 
+def _on_engine_update(self, context):
+    """NATIVE 以外へ切り替えたらリアルタイム表示を止める (止めるボタンが見えなくなって取り残されるため)。"""
+    if self.engine != "NATIVE" and selfphys_live.is_running():
+        selfphys_live.stop()
+
+
+def _wrap_lines(text, width=60, max_lines=4):
+    """パネルのラベル用に折り返す (長すぎる分は最終行の末尾を … にする)。"""
+    lines = textwrap.wrap(text, width) or [""]
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1][:max(width - 1, 1)] + "…"
+    return lines
+
+
 class MMD2GLTF_SceneProps(bpy.types.PropertyGroup):
     glb_path: StringProperty(name="GLB", subtype="FILE_PATH", default="",
                              description="対象の .glb (アーマチュアに記録が無いときに使う)")
     engine: EnumProperty(
-        name="物理エンジン", default="NATIVE",
+        name="物理エンジン", default="NATIVE", update=_on_engine_update,
         items=[("NATIVE", "自作エンジン", "MMD 互換の自作物理 (配線不要。ベイクまたはリアルタイム表示)"),
                ("BULLET", "Blender Bullet", "Blender のリジッドボディで再現する従来方式 (配線が必要)")])
     # physics
@@ -359,7 +375,7 @@ class MMD2GLTF_OT_native_remove_bake(bpy.types.Operator):
         if arm is None:
             self.report({"ERROR"}, "対象のアーマチュアを選択してください。")
             return {"CANCELLED"}
-        if selfphys_bake.remove_bake(arm):
+        if selfphys_bake.remove_bake(arm, lambda level, msg: self.report({level}, msg)):
             self.report({"INFO"}, "ベイクを削除しました")
         else:
             self.report({"INFO"}, "削除するベイクはありません")
@@ -385,7 +401,7 @@ class MMD2GLTF_OT_native_live_toggle(bpy.types.Operator):
             self.report({"ERROR"}, "GLB のパスが分かりません。パネルの GLB 欄に指定してください。")
             return {"CANCELLED"}
         try:
-            selfphys_live.start(context, arm, path)
+            selfphys_live.start(context, arm, path, lambda level, msg: self.report({level}, msg))
         except Exception as e:  # noqa: BLE001  (RuntimeError の理由 / NativeError)
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
@@ -546,10 +562,15 @@ class MMD2GLTF_PT_panel(bpy.types.Panel):
             col = box.column(align=True)
             col.alert = True
             col.label(text="自作エンジンを使えません (Blender Bullet 方式を表示)", icon="ERROR")
-            col.label(text=native_reason[:80])
+            for line in _wrap_lines(native_reason):
+                col.label(text=line)
         if use_native:
             self._draw_native(context, box, arm)
         else:
+            if selfphys_live.is_running():
+                # エンジンを切り替えても止める手段を残す
+                box.operator(MMD2GLTF_OT_native_live_toggle.bl_idname, text="リアルタイム表示を止める",
+                             icon="PAUSE", depress=True)
             self._draw_bullet(context, box, s)
 
         box = lay.box()
@@ -571,6 +592,12 @@ class MMD2GLTF_PT_panel(bpy.types.Panel):
         box.prop(s, "ik_prebend")
 
     def _draw_native(self, context, box, arm):
+        if physics_builder.has_bullet_wiring(arm):
+            col = box.column(align=True)
+            col.alert = True
+            col.label(text="Blender Bullet の配線が残っています", icon="ERROR")
+            col.label(text="(拘束が自作エンジンの結果を上書きします)")
+            col.operator(MMD2GLTF_OT_remove_physics.bl_idname, icon="TRASH")
         baked = arm is not None and selfphys_bake.has_bake(arm)
         box.label(text="ベイク済み" if baked else "未ベイク", icon="CHECKMARK" if baked else "DOT")
         box.operator(MMD2GLTF_OT_native_bake.bl_idname, icon="RENDER_ANIMATION")
@@ -583,8 +610,8 @@ class MMD2GLTF_PT_panel(bpy.types.Panel):
             box.label(text="ベイク済みのためリアルタイム表示は待機中", icon="INFO")
         if selfphys_live.last_error():
             box.label(text="停止: " + selfphys_live.last_error()[:70], icon="ERROR")
-        if selfphys_live.last_warning():
-            box.label(text="発散: " + str(selfphys_live.last_warning())[:70], icon="ERROR")
+        if selfphys_live.warning_message():
+            box.label(text=selfphys_live.warning_message(), icon="ERROR")
         box.label(text="キーはベイク時のシーン fps に従います (fps を変えたら再ベイク)", icon="INFO")
 
     def _draw_bullet(self, context, box, s):
@@ -646,6 +673,7 @@ def register():
 
 def unregister():
     selfphys_live.stop()   # ハンドラと native のハンドルを先に解放する
+    engine_bridge.reset_status()   # 無効化・有効化でライブラリを読み直せるように
     bpy.types.TOPBAR_MT_file_import.remove(menu_import)
     del bpy.types.Scene.mmd2gltf
     for c in reversed(classes):

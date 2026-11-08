@@ -16,7 +16,19 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-DEFAULT_GLB = os.environ.get("MMD_TEST_GLB_SMALL") or "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb"
+GLB_ENV = "MMD_TEST_GLB_SMALL"   # 引数を省いたときに使う環境変数 (native/tests/local_env.example.sh)
+
+
+def _glb_from_args(argv):
+    """引数 [glb] → 無ければ環境変数 GLB_ENV。どちらも無ければメッセージを出して終了 (2)。"""
+    if argv:
+        return os.path.abspath(argv[0])
+    v = os.environ.get(GLB_ENV)
+    if not v:
+        print(json.dumps({"ok": False, "error": "テスト GLB がありません: 引数か環境変数 %s で渡してください" % GLB_ENV},
+                         ensure_ascii=False))
+        sys.exit(2)
+    return os.path.abspath(v)
 POS_TOL = 1e-4
 ROT_TOL = 1e-3
 KEY_TOL = 1e-4
@@ -34,7 +46,7 @@ def _bone_of(dp):
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    glb = os.path.abspath(argv[0]) if argv else DEFAULT_GLB
+    glb = _glb_from_args(argv)
     res = {}
     ok = True
 
@@ -253,6 +265,66 @@ def main():
         check("remove_again_false", sb.remove_bake(arm) is False)
         check("orig_action_after_remove", ad.action == orig_action
               and sum(len(fc.keyframe_points) for fc in _fcurves(arm, orig_action)) == orig_keys)
+
+        # --- 書き込み途中の失敗: 途中までの状態を残さない --------------------
+        orig_write = sb._write_fcurve
+        calls = []
+
+        def bad_write(fc, xs, ys):
+            calls.append(1)
+            if len(calls) > 20:
+                raise RuntimeError("test: write failed")
+            orig_write(fc, xs, ys)
+        sb._write_fcurve = bad_write
+        raised = None
+        try:
+            sb.bake(bpy.context, arm, glb, lambda lv, m: None)
+        except RuntimeError as e:
+            raised = str(e)
+        finally:
+            sb._write_fcurve = orig_write
+        check("failed_bake_raises", raised == "test: write failed", raised)
+        check("failed_bake_cleaned", not sb.has_bake(arm) and sb.BAKE_ACTION_NAME not in bpy.data.actions
+              and sb.PROP_MUTED not in arm and ad.action == orig_action,
+              [sb.has_bake(arm), [a.name for a in bpy.data.actions], sb.PROP_MUTED in arm])
+
+        # --- 発散: nan_bone はボーン名だけ、メッセージは 1 回だけ包む ----------
+        orig_bake = eb.NativeModel.bake
+
+        def nan_bake(self, progress=None):
+            a, _w = orig_bake(self, progress)
+            w = "physics diverged (NaN) first at bone: テスト骨"
+            self.last_nan_bone = eb.nan_bone_from_message(w)
+            return a, w
+        eb.NativeModel.bake = nan_bake
+        msgs = []
+        try:
+            r3 = sb.bake(bpy.context, arm, glb, lambda lv, m: msgs.append((lv, m)))
+        finally:
+            eb.NativeModel.bake = orig_bake
+        check("nan_bone_name", r3["nan_bone"] == "テスト骨", r3["nan_bone"])
+        check("nan_message", ("WARNING", "物理が発散しました (最初の検出: ボーン 'テスト骨')") in msgs, msgs)
+        sb.remove_bake(arm)
+
+        # --- Bullet の配線が残っていると WARNING (ベイク・ライブとも) --------
+        from mmd2gltf_blender_importer import selfphys_live as live
+        physics_builder.build(bpy.context, arm, model, physics_builder.PhysicsOptions(), lambda lv, m: None)
+        wired = physics_builder.bullet_constrained_bones(arm)
+        check("wired_constraints", len(wired) > 0 and physics_builder.has_bullet_wiring(arm), len(wired))
+        msgs = []
+        sb.bake(bpy.context, arm, glb, lambda lv, m: msgs.append((lv, m)))
+        check("wired_bake_warning", any(lv == "WARNING" and "物理を削除" in m for lv, m in msgs), msgs)
+        sb.remove_bake(arm)
+        msgs = []
+        live.start(bpy.context, arm, glb, lambda lv, m: msgs.append((lv, m)))
+        live.stop()
+        check("wired_live_warning", any(lv == "WARNING" and "物理を削除" in m for lv, m in msgs), msgs)
+        physics_builder.remove_existing(arm)
+        check("unwired", not physics_builder.has_bullet_wiring(arm))
+        msgs = []
+        sb.bake(bpy.context, arm, glb, lambda lv, m: msgs.append((lv, m)))
+        check("unwired_no_warning", not any("物理を削除" in m for _, m in msgs), msgs)
+        sb.remove_bake(arm)
     except Exception:
         ok = False
         res["exception"] = traceback.format_exc()

@@ -78,7 +78,10 @@ Blender 上で実際に動く形へ自動変換するアドオンです。
   入力は GLB 内のアニメです。**Blender 上で編集したアクションはベイクに反映されません。**
 - **焼き込み済み GLB**：アクティブなアクションが揺れ物ボーンのキーを持つ GLB（`--bake-physics` など）でも、ベイクが効きます。
   Blender はアクティブなアクションを NLA より上で評価するため、ベイクがある間はアドオンがそのアクションの揺れ物ボーンの fcurve を mute します（キーは変更しません）。
-  **ベイクを削除**すると mute を元に戻します。
+  **ベイクを削除**すると mute を元に戻します。アクションを改名・解除して元のアクションが見つからないときは警告を出し、
+  名前を戻してから**ベイクを削除**すると戻ります。
+- **Blender Bullet で配線済みのアーマチュア**：配線のボーン拘束がベイク・リアルタイム表示を上書きするので、警告とともに
+  パネルに**物理を削除**が出ます。押してから使ってください。エンジンを Blender Bullet に切り替えるとリアルタイム表示は止まります。
 - **fps**：キーは**ベイク時のシーン fps** に従って打たれます。fps を変えたら、ベイクを削除して取り直してください。
 - **リアルタイム表示の性質**（Blender が評価したポーズを入力にするため、ビット一致は求めていません）：
   - 時間を戻す・シークすると、物理をリセットして計算し直します。
@@ -135,7 +138,8 @@ glTF の Principled BSDF を、MMD 風のノード構成へ置き換えます（
 
 - **Blender 4.2 以降**（開発・検証は 5.2 LTS）。glTF インポーター（標準同梱）が有効であること
 - `mmd2gltf-gui`（または `mmd2gltf-cs`）で変換した `.glb`
-- 自作エンジンを使う場合：macOS（Apple Silicon）。ライブラリは zip に同梱されます。Windows（x64）は CI でビルドする予定で、まだ同梱していません
+- 自作エンジンを使う場合：macOS 11.2 以降（Apple Silicon）。ライブラリは zip に同梱されます。Windows（x64）は CI でビルドする予定で、まだ同梱していません。
+  ライブラリが無い環境（Intel Mac・Linux・現時点の Windows）でもアドオンは入り、パネルに理由を出して Blender Bullet 方式で動きます
 - 共有トゥーンを復元したい場合は、MMD 本体同梱の `toon01.bmp`〜`toon10.bmp`
 
 ---
@@ -151,7 +155,8 @@ glTF の Principled BSDF を、MMD 風のノード構成へ置き換えます（
 **macOS の注意**：ネイティブライブラリ（`native_lib/libmmdphys.dylib`）は ad-hoc 署名で、公証はしていません。
 Blender の「ディスクからインストール」で入れる分には、Blender と同じ方式で展開すると隔離属性が付かないことを確認しています（Python の zipfile で再現。GUI からのインストールは未試行）。ただし、ブラウザで落とした zip を
 Finder で展開した**フォルダ**を手で拡張機能フォルダへ置くと、隔離属性が残ってライブラリを読めないことがあります。
-その場合はパネルに理由が出るので、ターミナルで `xattr -d com.apple.quarantine <libmmdphys.dylib のパス>` を実行してください。
+その場合はパネルに理由が出るので、ターミナルで `xattr -d com.apple.quarantine <libmmdphys.dylib のパス>` を実行し、
+Blender の再起動（またはアドオンの無効化・有効化）をしてください（読み込みの成否は起動中キャッシュされるため）。
 
 ---
 
@@ -238,6 +243,8 @@ Finder で展開した**フォルダ**を手で拡張機能フォルダへ置く
 自作エンジンのライブラリは `native/`（CMake）から作ります。配布 zip にはビルド済みが入るので、使うだけなら不要です。
 
 ```bash
+cp native/tests/local_env.example.sh native/tests/local_env.sh   # 自分のパスに書き換える (コミットしない)
+source native/tests/local_env.sh
 cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
 cmake --build native/build
 ctest --test-dir native/build
@@ -247,8 +254,18 @@ cmake --install native/build     # mmd2gltf_blender_importer/native_lib/ へ置�
 - **Release でビルドする**こと。`-ffast-math` / `-Ofast` / `/fp:fast` は使いません（浮動小数点の結果が C# エンジンとずれるため。CMake が `-ffp-contract=off` / `/fp:precise` を付けます）。
 - `ctest` には、C# 基準とのビット一致テスト（層 2〜4）が含まれます。隣のディレクトリに
   `mmd2gltf-ue5-physics-importer`（`native/vendor/MmdPhysicsCore` の同期検査）と `mmd2gltf-cs`（physbake で基準 CSV を作る。.NET SDK が要る）を
-  置いてください。テスト用 GLB は環境変数 `MMD_TEST_GLB_SMALL` / `MMD_TEST_GLB`（大）/ `MMD_TEST_GLB_NOEXTRAS` / `MMD_TEST_GLB_NOANIM` で渡します（リポジトリには含めません）。
-  UE5 リポジトリが別の場所にあるときは `-DMMD_UE5_CORE_DIR=...`。
+  置いてください（別の場所なら環境変数 `MMD_UE5_REPO` / `MMD_CS_REPO` と `-DMMD_UE5_CORE_DIR=...`）。
+  テスト用 GLB は環境変数で渡します（リポジトリには含めません。例は `native/tests/local_env.example.sh`）。configure の前に設定してください。
+  未設定のまま `ctest` すると、そのテストは「環境変数が未設定」と言って失敗します。
+
+  | 環境変数 | 中身 | 使うテスト |
+  |---|---|---|
+  | `MMD_TEST_GLB_SMALL` | アニメ付きの小さい GLB | test_load / parity_engine / *_small / capi、ヘッドレステスト |
+  | `MMD_TEST_GLB` | アニメ付きの大きい GLB | *_big |
+  | `MMD_TEST_GLB_NOEXTRAS` | extras.mmd の無い GLB | capi |
+  | `MMD_TEST_GLB_NOANIM` | アニメの無い GLB | capi |
+  | `MMD_TEST_GLB_PREBAKED` | 物理を焼き込み済みの GLB | `tests/headless_selfphys_override.py` |
+- macOS の最低対応版は 11.2（`CMAKE_OSX_DEPLOYMENT_TARGET`。Blender 4.2 の要件に合わせています）。既存の build ディレクトリでは作り直すか `-DCMAKE_OSX_DEPLOYMENT_TARGET=11.2` を付けてください。
 - Windows は Visual Studio（MSVC）でビルドし、`bash`（Git for Windows）が要ります。
 - 手元のライブラリを使うだけなら、環境変数 `MMD_NATIVE_LIB` にファイルのフルパスを指定しても読み込めます。
 
@@ -263,7 +280,8 @@ cmake --install native/build     # mmd2gltf_blender_importer/native_lib/ へ置�
 ```
 
 ボーン位置の一致（PMX 由来の計算値との差 < 1mm）、60 フレーム再生後の動的剛体の最大移動量、
-NaN の有無を検査して JSON で出力します。
+NaN の有無を検査して JSON で出力します。自作エンジンの各部は `tests/headless_*.py` で検査します
+（GLB は引数か上の環境変数で渡します。例：`Blender -b -P tests/headless_selfphys_bake.py -- model.glb`）。
 
 ---
 

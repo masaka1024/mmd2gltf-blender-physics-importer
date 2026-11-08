@@ -1,7 +1,10 @@
 # ===========================================================================
 # ネイティブ物理エンジン (libmmdphys / mmdphys.dll) を ctypes で呼ぶ窓口。
 #   - ライブラリの場所: 環境変数 MMD_NATIVE_LIB (ファイルのフルパス) → このモジュールの隣の native_lib/
-#   - load_status() で「読み込めたか・できない理由」を返す (結果はキャッシュ)。
+#   - load_status() で「読み込めたか・できない理由」を返す (結果はキャッシュ。アドオンの
+#     unregister() で reset_status() を呼ぶので、無効化・有効化で読み直せる)。
+#   - ライブラリが無い環境 (Linux / Intel Mac など未同梱のプラットフォーム) では
+#     「ライブラリが見つかりません: …」を理由に返し、アドオンは Blender Bullet 方式に切り替わる。
 #   - 姿勢 = 1 ボーン 7 float (px,py,pz,qx,qy,qz,qw)、raw PMX 空間。
 #   - 戻り値の約束は native/include/mmdphys_capi.h を参照。
 # ===========================================================================
@@ -36,7 +39,12 @@ def _lib_path():
     env = os.environ.get("MMD_NATIVE_LIB")
     if env:
         return env
-    name = "mmdphys.dll" if sys.platform == "win32" else "libmmdphys.dylib"
+    if sys.platform == "win32":
+        name = "mmdphys.dll"
+    elif sys.platform == "darwin":
+        name = "libmmdphys.dylib"
+    else:
+        name = "libmmdphys.so"   # 現在は同梱していない (見つからなければ Bullet 方式)
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "native_lib", name)
 
 
@@ -98,18 +106,42 @@ def _load():
 
 
 def load_status():
-    """(読み込めたか, 理由)。結果はキャッシュされる。"""
+    """(読み込めたか, 理由)。結果はキャッシュされる。読めなかったときは理由の全文を 1 回だけ stderr に出す。"""
     global _lib, _status
     if _status is None:
         _lib, reason = _load()
         _status = (_lib is not None, reason)
+        if _lib is None:
+            print("mmd2gltf: 自作エンジンを読み込めません (Blender Bullet 方式を使います): " + reason,
+                  file=sys.stderr)
     return _status
 
 
-def _reset_for_tests():
+def reset_status():
+    """キャッシュを捨てる (次の load_status() で読み直す)。アドオンの unregister() から呼ぶ。
+    読み込み済みの共有ライブラリはプロセスから外せないが、失敗理由の再判定には十分。"""
     global _lib, _status
     _lib = None
     _status = None
+
+
+_reset_for_tests = reset_status
+
+
+def nan_bone_from_message(msg):
+    """native の発散メッセージ ("... first at bone: <名前>; ..." / "... first at bone: <名前>")
+    からボーン名だけを取り出す。見つからなければ None。"""
+    if not msg:
+        return None
+    key = "first at bone: "
+    i = msg.find(key)
+    if i < 0:
+        return None
+    name = msg[i + len(key):]
+    j = name.find(";")
+    if j >= 0:
+        name = name[:j]
+    return name.strip() or None
 
 
 def _last_error():
@@ -144,6 +176,7 @@ class NativeModel:
         self._h = h
         self._info = None
         self.live_warning = None
+        self.last_nan_bone = None   # 直近の bake / live_step で発散した最初のボーン名 (無ければ None)
         info = self._call_info()
         self._bones = info["bone_count"]
         self._frames = info["frame_count"]
@@ -190,7 +223,8 @@ class NativeModel:
         return list(arr[:got])
 
     def bake(self, progress=None):
-        """全フレームを焼く。戻り値 (array('f') [frame][bone][7], 警告文 | None)。"""
+        """全フレームを焼く。戻り値 (array('f') [frame][bone][7], 警告文 | None)。
+        発散したら self.last_nan_bone に最初のボーン名を入れる。"""
         h = self._handle()
         n = self._frames * self._bones * 7
         arr = array("f", [0.0]) * n
@@ -211,11 +245,14 @@ class NativeModel:
             raise err[0]
         if rc == MMD_ERR:
             raise NativeError(_last_error())
-        return arr, (_last_error() if rc == MMD_WARN_NAN else None)
+        warn = _last_error() if rc == MMD_WARN_NAN else None
+        self.last_nan_bone = nan_bone_from_message(warn) if warn else None
+        return arr, warn
 
     def live_reset(self, world_in):
         _check_len(world_in, self._bones * 7, "world_in")
         self.live_warning = None
+        self.last_nan_bone = None
         if _lib.mmd_live_reset(self._handle(), _addr(world_in)) == MMD_ERR:
             raise NativeError(_last_error())
 
@@ -223,13 +260,14 @@ class NativeModel:
         """1 ステップ進める。戻り値 array('f') [bone][7]。
 
         発散 (MMD_WARN_NAN) のときは例外にせず、self.live_warning に警告文
-        ("... first at bone: <名前>; ...") を入れる (それ以外は None)。"""
+        ("... first at bone: <名前>; ...")、self.last_nan_bone にボーン名を入れる (それ以外は None)。"""
         _check_len(world_in, self._bones * 7, "world_in")
         out = array("f", [0.0]) * len(world_in)
         rc = _lib.mmd_live_step(self._handle(), _addr(world_in), float(dt), _addr(out))
         if rc == MMD_ERR:
             raise NativeError(_last_error())
         self.live_warning = _last_error() if rc == MMD_WARN_NAN else None
+        self.last_nan_bone = nan_bone_from_message(self.live_warning) if self.live_warning else None
         return out
 
     def close(self):

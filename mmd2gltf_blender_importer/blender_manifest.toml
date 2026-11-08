@@ -9,7 +9,7 @@ type = "add-on"
 website = "https://github.com/masaka1024/mmd2gltf-blender-physics-importer"
 tags = ["Import-Export", "Physics", "Material"]
 blender_version_min = "4.2.0"
-platforms = ["macos-arm64", "windows-x64"]
+platforms = ["macos-arm64", "macos-x64", "linux-x64", "windows-x64"]
 license = ["SPDX:MIT"]
 copyright = ["2026 masaka1024"]
 

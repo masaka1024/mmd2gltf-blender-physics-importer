@@ -18,7 +18,19 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-DEFAULT_GLB = os.environ.get("MMD_TEST_GLB_SMALL") or "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb"
+GLB_ENV = "MMD_TEST_GLB_SMALL"   # 引数を省いたときに使う環境変数 (native/tests/local_env.example.sh)
+
+
+def _glb_from_args(argv):
+    """引数 [glb] → 無ければ環境変数 GLB_ENV。どちらも無ければメッセージを出して終了 (2)。"""
+    if argv:
+        return os.path.abspath(argv[0])
+    v = os.environ.get(GLB_ENV)
+    if not v:
+        print(json.dumps({"ok": False, "error": "テスト GLB がありません: 引数か環境変数 %s で渡してください" % GLB_ENV},
+                         ensure_ascii=False))
+        sys.exit(2)
+    return os.path.abspath(v)
 ROUNDTRIP_TOL = 1e-5
 FRAMES = list(range(1, 61))
 
@@ -47,7 +59,7 @@ def _has_nan(arm, names):
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    glb = os.path.abspath(argv[0]) if argv else DEFAULT_GLB
+    glb = _glb_from_args(argv)
     res = {}
     ok = True
 
@@ -260,8 +272,14 @@ def main():
         bad = array("f", [float("nan")] * len(w))
         nm2.live_step(bad, 1.0 / 24)
         warn = nm2.live_warning
+        nan_bone = nm2.last_nan_bone
         nm2.close()
         check("nan_warning_has_bone", warn is not None and "first at bone:" in warn, warn)
+        check("nan_bone_name_only", bool(nan_bone) and "first at bone" not in nan_bone
+              and ";" not in nan_bone and nan_bone in warn, nan_bone)
+        live._last_warning = nan_bone
+        check("nan_panel_message", live.warning_message() == f"物理が発散しました (最初の検出: ボーン '{nan_bone}')",
+              live.warning_message())
 
         # --- 削除 -------------------------------------------------------
         live.start(bpy.context, arm, glb)
@@ -276,8 +294,12 @@ def main():
         sc.frame_set(1)
         sc.frame_set(2)
         check("running_before_reopen", live.is_running())
+        live._last_error = "前のファイルの停止理由"
+        live._last_warning = "前のファイルのボーン"
         bpy.ops.wm.read_factory_settings(use_empty=True)
         check("reopen_stops", not live.is_running())
+        check("reopen_clears_messages", live.last_error() is None and live.last_warning() is None,
+              [live.last_error(), live.last_warning()])
         bpy.context.scene.frame_set(5)
         bpy.context.scene.frame_set(6)
         check("reopen_no_error", live.last_error() is None and not live.is_running(), live.last_error())

@@ -12,12 +12,24 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-DEFAULT_GLB = "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb"
+GLB_ENV = "MMD_TEST_GLB_SMALL"   # 引数を省いたときに使う環境変数 (native/tests/local_env.example.sh)
+
+
+def _glb_from_args(argv):
+    """引数 [glb] → 無ければ環境変数 GLB_ENV。どちらも無ければメッセージを出して終了 (2)。"""
+    if argv:
+        return os.path.abspath(argv[0])
+    v = os.environ.get(GLB_ENV)
+    if not v:
+        print(json.dumps({"ok": False, "error": "テスト GLB がありません: 引数か環境変数 %s で渡してください" % GLB_ENV},
+                         ensure_ascii=False))
+        sys.exit(2)
+    return os.path.abspath(v)
 
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    glb = os.path.abspath(argv[0]) if argv else DEFAULT_GLB
+    glb = _glb_from_args(argv)
     res = {}
     ok = True
 
@@ -82,6 +94,21 @@ def main():
         except eb.NativeError:
             check("missing_lib_raises", True)
         del os.environ["MMD_NATIVE_LIB"]
+
+        # Linux など未同梱のプラットフォーム: .so を探し、無ければ「見つかりません」(→ Bullet 方式)
+        orig_plat = eb.sys.platform
+        try:
+            eb.sys.platform = "linux"
+            check("linux_lib_name", eb._lib_path().endswith(os.path.join("native_lib", "libmmdphys.so")),
+                  eb._lib_path())
+        finally:
+            eb.sys.platform = orig_plat
+
+        # 発散メッセージ → ボーン名だけ
+        check("nan_bone_parse", eb.nan_bone_from_message(
+            "physics diverged (NaN) first at bone: 左髪1; previous pose kept for affected bones") == "左髪1"
+              and eb.nan_bone_from_message("physics diverged (NaN) first at bone: 右袖") == "右袖"
+              and eb.nan_bone_from_message("other") is None and eb.nan_bone_from_message(None) is None)
 
         # 版数違い
         eb._reset_for_tests()

@@ -15,7 +15,19 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-DEFAULT_GLB = os.environ.get("MMD_TEST_GLB_PREBAKED") or "/Users/masaka1024/Downloads/IA 2/IA.glb"
+GLB_ENV = "MMD_TEST_GLB_PREBAKED"   # 引数を省いたときに使う環境変数 (native/tests/local_env.example.sh)
+
+
+def _glb_from_args(argv):
+    """引数 [glb] → 無ければ環境変数 GLB_ENV。どちらも無ければメッセージを出して終了 (2)。"""
+    if argv:
+        return os.path.abspath(argv[0])
+    v = os.environ.get(GLB_ENV)
+    if not v:
+        print(json.dumps({"ok": False, "error": "テスト GLB がありません: 引数か環境変数 %s で渡してください" % GLB_ENV},
+                         ensure_ascii=False))
+        sys.exit(2)
+    return os.path.abspath(v)
 POS_TOL = 1e-4
 RESTORE_TOL = 1e-5
 TRANSFORM = ("location", "rotation_quaternion", "rotation_euler", "rotation_axis_angle", "scale")
@@ -23,7 +35,7 @@ TRANSFORM = ("location", "rotation_quaternion", "rotation_euler", "rotation_axis
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    glb = os.path.abspath(argv[0]) if argv else DEFAULT_GLB
+    glb = _glb_from_args(argv)
     res, ok = {}, True
 
     def check(name, cond, detail=None):
@@ -143,6 +155,35 @@ def main():
         check("muted_again", len(muted_now()) == len(tf))
         sb.remove_bake(arm)
         check("unmuted_plain", muted_now() == [] and maxdiff(before, sample()) < RESTORE_TOL)
+
+        # アクションを改名しても、アクティブなままなら (記録の data_path があるので) 戻せる
+        sb.bake(bpy.context, arm, glb, lambda lv, m: None)
+        orig_name = act.name
+        act.name = orig_name + "_renamed"
+        msgs = []
+        sb.remove_bake(arm, lambda lv, m: msgs.append((lv, m)))
+        check("renamed_active_unmuted", muted_now() == [] and sb.PROP_MUTED not in arm
+              and not any(lv == "WARNING" for lv, _ in msgs), msgs)
+        act.name = orig_name
+
+        # 改名 + アクティブから外す → 戻せない: 記録を残して WARNING。名前を戻せば次の remove_bake で戻る
+        sb.bake(bpy.context, arm, glb, lambda lv, m: None)
+        act.name = orig_name + "_renamed"
+        arm.animation_data.action = None
+        msgs = []
+        sb.remove_bake(arm, lambda lv, m: msgs.append((lv, m)))
+        check("renamed_record_kept", sb.PROP_MUTED in arm and len(muted_now()) == len(tf), len(muted_now()))
+        check("renamed_warning", any(lv == "WARNING" and "mute" in m for lv, m in msgs), msgs)
+        # 記録が残ったまま再ベイクしても古い記録は消えない
+        sb.bake(bpy.context, arm, glb, lambda lv, m: None)
+        check("rebake_keeps_old_record", sb.PROP_MUTED in arm and len(sb._muted_records(arm)) == 1
+              and len(muted_now()) == len(tf), len(sb._muted_records(arm)))
+        act.name = orig_name
+        arm.animation_data.action = act
+        msgs = []
+        sb.remove_bake(arm, lambda lv, m: msgs.append((lv, m)))
+        check("renamed_back_unmuted", muted_now() == [] and sb.PROP_MUTED not in arm, [len(muted_now()), msgs])
+        check("renamed_back_restored", maxdiff(before, sample()) < RESTORE_TOL)
 
         # 記録に無い mute (利用者が自分で mute) は戻さない
         user_fc = tf[0]

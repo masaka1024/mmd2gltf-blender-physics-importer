@@ -14,7 +14,19 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-DEFAULT_GLB = os.environ.get("MMD_TEST_GLB_SMALL") or "/Users/masaka1024/Desktop/IA_Conqueror_v4のコピー.glb"
+GLB_ENV = "MMD_TEST_GLB_SMALL"   # 引数を省いたときに使う環境変数 (native/tests/local_env.example.sh)
+
+
+def _glb_from_args(argv):
+    """引数 [glb] → 無ければ環境変数 GLB_ENV。どちらも無ければメッセージを出して終了 (2)。"""
+    if argv:
+        return os.path.abspath(argv[0])
+    v = os.environ.get(GLB_ENV)
+    if not v:
+        print(json.dumps({"ok": False, "error": "テスト GLB がありません: 引数か環境変数 %s で渡してください" % GLB_ENV},
+                         ensure_ascii=False))
+        sys.exit(2)
+    return os.path.abspath(v)
 
 
 def _non_identity(arm):
@@ -24,7 +36,7 @@ def _non_identity(arm):
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    glb = os.path.abspath(argv[0]) if argv else DEFAULT_GLB
+    glb = _glb_from_args(argv)
     res = {}
     ok = True
 
@@ -78,12 +90,20 @@ def main():
         r = bpy.ops.mmd2gltf.native_remove_bake()
         check("remove_bake", r == {"FINISHED"} and not sb.has_bake(arm))
 
+        # エンジンを BULLET に切り替えるとライブが止まる (止めるボタンが見えなくなるため)
+        r = bpy.ops.mmd2gltf.native_live_toggle()
+        check("live_before_switch", live.is_running())
+        sc.mmd2gltf.engine = "BULLET"
+        check("switch_stops_live", not live.is_running())
+        sc.mmd2gltf.engine = "NATIVE"
+
         # unregister でライブが止まりハンドラが消える
         r = bpy.ops.mmd2gltf.native_live_toggle()
         check("live_restart", live.is_running())
         n_handlers = len(bpy.app.handlers.frame_change_post)
         addon.unregister()
         check("unregister_stops_live", not live.is_running())
+        check("unregister_resets_load_status", addon.engine_bridge._status is None)
         check("unregister_handlers", live._on_frame_change not in bpy.app.handlers.frame_change_post
               and len(bpy.app.handlers.frame_change_post) < n_handlers, n_handlers)
         addon.register()

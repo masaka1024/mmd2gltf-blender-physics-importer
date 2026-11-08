@@ -97,7 +97,9 @@ mmd2gltf-blender-physics-importer/
 - CMake。浮動小数点は UE5 版 (`FPSemantics = Precise`) に合わせる: clang `-ffp-contract=off`、MSVC `/fp:precise`。
   `-ffast-math` 系は使わない。
 - macOS arm64 はこの Mac でビルドする。Windows x64 は GitHub Actions でビルドする (リポジトリ公開後)。
-- 拡張機能マニフェストに `platforms = ["macos-arm64", "windows-x64"]` を書き、両方のライブラリを同梱した zip を作る。
+- 拡張機能マニフェストに `platforms = ["macos-arm64", "macos-x64", "linux-x64", "windows-x64"]` を書く
+  (ライブラリが無いプラットフォームでも「ライブラリが見つかりません」で Bullet 方式に切り替わるため)。macOS arm64 と Windows x64 のライブラリを同梱した zip を作る。
+- macOS の最低対応版 (CMAKE_OSX_DEPLOYMENT_TARGET) は 11.2 (Blender 4.2 の要件)。
 - macOS 版は ad-hoc codesign する。
 
 ## 5. データの流れ
@@ -112,7 +114,11 @@ GLB ─▶ [C++] GLB 読み込み → FK (補間 → MMD 座標 → 親子の積
        → アクション「MMD Physics Bake」に揺れ物ボーンだけキーを打ち、NLA の上段 (Replace) に置く
 ```
 
-- 元のアクションは変更しない。焼き直すと NLA の段を差し替え、「ベイクを削除」で段とアクションを消す。
+- 元のアクションのキーは変更しない。ただし Blender はアクティブなアクションを NLA より上で評価するため、
+  ベイクがある間はアクティブなアクションの揺れ物ボーンの変換 fcurve を mute する (焼き込み済み GLB でもベイクが見えるように)。
+  mute した fcurve はアーマチュアの ID プロパティ `mmd2gltf_bake_muted` に記録し、「ベイクを削除」・焼き直しで戻す
+  (利用者が自分で mute したものは触らない。アクションを改名・解除して記録のアクションが見つからないときは、記録を残して警告する)。
+  焼き直すと NLA の段を差し替え、「ベイクを削除」で段とアクションを消す。
 - 進行表示は `window_manager.progress_*` を使う。
 
 ### 5.2 リアルタイム

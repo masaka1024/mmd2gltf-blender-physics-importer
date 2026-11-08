@@ -33,6 +33,8 @@
 #   サブフレーム (モーションブラー、frame_set(f, subframe=x)) は何もしない
 #   (リセットもステップもしない。直前の整数フレームの書き込みがそのまま見える)。
 #   発散 (NaN) は native が直前の姿勢を保持するので、最初のボーン名を 1 回だけ警告して続ける。
+#   Blender Bullet の配線 (physics_builder のボーン拘束) が残っていると拘束が書き込みを
+#   上書きするので、開始時に WARNING を出す (パネルにも「物理を削除」を出す)。
 # ===========================================================================
 import math
 import sys
@@ -43,7 +45,7 @@ import bpy
 from bpy.app.handlers import persistent
 from mathutils import Matrix
 
-from . import engine_bridge, glb_reader, mmd_math as mm
+from . import engine_bridge, glb_reader, mmd_math as mm, physics_builder
 from . import selfphys_bake as sb
 
 
@@ -56,7 +58,7 @@ _last_frame = None    # 直前に処理したフレーム (None = 次は必ず�
 _ctx = None           # ボーン対応・行列の控え (Bone 参照は持たない)
 _in_handler = False   # 再入ガード
 _last_error = None    # 直近の停止理由 (Task 11 の UI 表示用)
-_last_warning = None  # 直近の発散警告 (1 回だけ出す)
+_last_warning = None  # 直近の発散で最初に検出したボーン名 (1 回だけ出す)
 _last_out = None      # 直近の live_step の出力 (テスト用)
 _stats = {"resets": 0, "steps": 0, "rebuilds": 0, "handler_seconds": 0.0, "handler_calls": 0}
 
@@ -94,16 +96,32 @@ def last_error():
 
 
 def last_warning():
+    """発散した最初のボーン名 (無ければ None)。"""
     return _last_warning
 
 
-def start(context, arm, glb_path):
+def warning_message():
+    """パネル表示用の発散メッセージ (無ければ None)。"""
+    if _last_warning is None:
+        return None
+    return f"物理が発散しました (最初の検出: ボーン '{_last_warning}')"
+
+
+def start(context, arm, glb_path, report=None):
     """リアルタイム表示を始める (既に動いていれば止めてから)。
 
     失敗時は例外を投げる (モデル読み込みは NativeError 等、最初のフレームの処理で
-    止まった場合は RuntimeError(理由))。正常に戻れば is_running() は True。"""
+    止まった場合は RuntimeError(理由))。正常に戻れば is_running() は True。
+    report(level, msg) を渡すと、Bullet の配線が残っているとき WARNING を出す。"""
     global _nm, _model, _arm_name, _arm_uid, _last_frame, _ctx, _last_error, _last_warning
     stop()
+    wired = physics_builder.bullet_constrained_bones(arm)
+    if wired:
+        msg = physics_builder.BULLET_WIRING_WARNING.format(n=len(wired))
+        if report is not None:
+            report("WARNING", msg)
+        else:
+            print("mmd2gltf: 警告: " + msg, file=sys.stderr)
     path = bpy.path.abspath(glb_path)
     nm = engine_bridge.NativeModel(path)
     try:
@@ -332,8 +350,8 @@ def _on_frame_change(scene, depsgraph=None):
             dt = r.fps_base / r.fps
             out = _nm.live_step(world_in, dt)
             if _nm.live_warning and _last_warning is None:
-                _last_warning = _nm.live_warning
-                print("mmd2gltf: 警告: 物理が発散しました (直前の姿勢を保持): " + _last_warning,
+                _last_warning = _nm.last_nan_bone or _nm.live_warning
+                print("mmd2gltf: 警告: 物理が発散しました (直前の姿勢を保持): " + _nm.live_warning,
                       file=sys.stderr)
             _write_step(arm, arm_eval, ctx, out)
             _last_out = out
@@ -355,4 +373,7 @@ def _on_frame_change(scene, depsgraph=None):
 @persistent
 def _on_load_pre(*_args):
     # 読み込み中なのでハンドラ一覧はここでは触らない (残っても _nm が None なので無害)。
+    global _last_error, _last_warning
     _stop(remove_handlers=False)
+    _last_error = None     # 前のファイルの停止理由・発散警告を新しいファイルに持ち越さない
+    _last_warning = None

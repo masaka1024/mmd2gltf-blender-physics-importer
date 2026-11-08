@@ -195,6 +195,29 @@ def remove_existing(arm):
     return removed
 
 
+def bullet_constrained_bones(arm):
+    """build() が揺れ物ボーンに付けた拘束 (COPY_TRANSFORMS / COPY_ROTATION、名前が
+    CONSTRAINT_NAME で始まる) を持つボーン名の一覧。拘束は NLA / matrix_basis の後に
+    評価されるので、残っていると自作エンジンのベイク・リアルタイム表示を上書きしてしまう。"""
+    if arm is None or arm.type != "ARMATURE" or arm.pose is None:
+        return []
+    return [pb.name for pb in arm.pose.bones
+            if any(c.name.startswith(CONSTRAINT_NAME) for c in pb.constraints)]
+
+
+def has_bullet_wiring(arm):
+    """このアーマチュア向けの Bullet 配線 (ボーン拘束または生成オブジェクト) が残っているか。"""
+    if arm is None:
+        return False
+    if bullet_constrained_bones(arm):
+        return True
+    return any(o.get(PROP_OWNER) == arm.name and o.get(PROP_ROLE) for o in bpy.data.objects)
+
+
+BULLET_WIRING_WARNING = ("Blender Bullet の配線が残っています (拘束付きボーン {n} 本)。"
+                         "拘束が自作エンジンの結果を上書きするので、【1】物理の「物理を削除」を押してください")
+
+
 def _layer_collection(view_layer, name):
     def walk(lc):
         if lc.collection.name == name:
