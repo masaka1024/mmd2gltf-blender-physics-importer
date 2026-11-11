@@ -71,7 +71,8 @@ def main():
     live = None
     try:
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.import_scene.gltf(filepath=glb, bone_heuristic="TEMPERANCE")
+        from mmd2gltf_blender_importer import import_gltf  # 4.2〜5.1 の glTF インポーター不具合を回避
+        import_gltf(glb)
         arm = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
         arm["mmd2gltf_glb"] = glb
         sc = bpy.context.scene
@@ -288,7 +289,8 @@ def main():
         arm = None
         sc.frame_set(10)
         check("delete_stops", not live.is_running() and live.last_error() is not None, live.last_error())
-        bpy.ops.import_scene.gltf(filepath=glb, bone_heuristic="TEMPERANCE")
+        from mmd2gltf_blender_importer import import_gltf  # 4.2〜5.1 の glTF インポーター不具合を回避
+        import_gltf(glb)
         arm2 = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
         live.start(bpy.context, arm2, glb)
         sc.frame_set(1)

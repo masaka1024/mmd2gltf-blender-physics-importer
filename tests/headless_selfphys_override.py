@@ -45,7 +45,8 @@ def main():
 
     try:
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.import_scene.gltf(filepath=glb, bone_heuristic="TEMPERANCE")
+        from mmd2gltf_blender_importer import import_gltf  # 4.2〜5.1 の glTF インポーター不具合を回避
+        import_gltf(glb)
         arm = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
         arm["mmd2gltf_glb"] = glb
         sc = bpy.context.scene

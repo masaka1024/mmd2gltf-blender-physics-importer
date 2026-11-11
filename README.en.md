@@ -115,9 +115,13 @@ Rebuilds Blender IK constraints from `nodes[i].extras.mmd.ik`, with approximate 
 (knees) get a small pre-bend (10° by default) in the pose so the solver does not get stuck trying to hyperextend
 a perfectly straight leg (the same problem MMD solves with its knee special case).
 
+For an animated GLB, IK chains whose bones (leg, knee, ankle, ...) carry keys are not built. mmd2gltf bakes the VMD
+as IK-solved rotations and leaves the IK bones themselves unkeyed, so an IK constraint would pull the leg toward a
+motionless IK bone and twist it (skipped IKs are reported as a warning). IK is meant for posing models without animation.
+
 ## Requirements
 
-- Blender 4.2 or later (developed on 5.2 LTS) with the bundled glTF importer enabled
+- Blender 4.2 or later (developed on 5.2 LTS; install-from-zip, import and bake verified on macOS arm64 with 4.2.23 LTS / 5.1.2 / 5.2.1) with the bundled glTF importer enabled
 - A `.glb` converted by `mmd2gltf-gui` (or `mmd2gltf-cs`)
 - For the native engine: macOS 11.2 or later (Apple Silicon); the library ships in the zip. The Windows (x64) library ships in the zip too (verified on Blender 5.2).
   Where the library is absent (Intel Mac, Linux, ...) the add-on still installs, shows the reason in the panel and uses Blender Bullet
@@ -128,7 +132,7 @@ a perfectly straight leg (the same problem MMD solves with its knee special case
 Build a zip with `tools/build_zip.sh` and install it from *Edit > Preferences > Extensions > Install from Disk*.
 
 **macOS note**: the native library (`native_lib/libmmdphys.dylib`) is ad-hoc signed and not notarized. Installing through
-Blender's *Install from Disk* is fine: extraction the way Blender does it leaves no quarantine attribute (verified by simulating with Python zipfile; GUI install not yet tried). But if you extract a browser-downloaded zip with Finder and copy the
+Blender's *Install from Disk* is fine: extraction the way Blender does it leaves no quarantine attribute (verified with Blender's own install routine, the same one the GUI uses, from a zip carrying the browser quarantine attribute). But if you extract a browser-downloaded zip with Finder and copy the
 resulting **folder** into the extensions folder by hand, the quarantine attribute can remain and the library fails to load.
 The panel shows the reason; run `xattr -d com.apple.quarantine <path to libmmdphys.dylib>` in a terminal, then restart Blender
 (or disable and re-enable the add-on) — the load result is cached for the session.
@@ -173,9 +177,9 @@ The native engine is not affected by these (the same engine as Unity / UE5 compu
 ## Known limitations
 
 - **Native engine: physics → non-physics → physics bone chains** are not exact (the middle bone is handled with FK).
-- **Blender 4.2–4.3** (legacy action API path): the native bake is untested there (verified on 5.1 / 5.2).
+- **Blender 4.2–4.3** (legacy action API path): verified on 4.2.23 LTS; the bake differs from 5.2 by about 1e-6 at most (4.3 not tried).
 - **Windows library** has been verified on one PC only (Windows x64 / MSVC 14.44 / Blender 5.2). Other CPUs and Blender versions are untested.
-- **Blender 5.1's own glTF importer** can crash on some MMD GLBs that carry custom attributes (`_SDEF_*`, `_EDGESCALE`, `_WEIGHTTYPE`). That is an importer bug, not this add-on.
+- **Blender 4.2–5.1's own glTF importer** mismatches custom vertex attributes (`_SDEF_*`, `_EDGESCALE`, `_WEIGHTTYPE`) from run to run and can crash (fixed in 5.2). When importing through this add-on they are stripped first to avoid it, so on 5.1 and earlier the mesh does not carry them (the add-on does not use them).
 
 ## Building the native library
 
