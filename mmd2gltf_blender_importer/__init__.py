@@ -8,6 +8,7 @@
 # を再構築する。Unity 版 mmd2gltf-unity-physics-importer の Blender 移植。
 # ===========================================================================
 import os
+import tempfile
 import textwrap
 
 import bpy
@@ -41,6 +42,37 @@ def load_model(path, force=False):
     m = glb_reader.load(path)
     _model_cache[key] = m
     return m
+
+
+def import_gltf(path, bone_heuristic="TEMPERANCE", model=None):
+    """Blender 標準の glTF インポーターで読む。版ごとの違いを吸収する (テストからも使う)。
+
+    - 4.2〜5.1 の glTF インポーターはカスタム頂点属性 (_SDEF_C など) を set の順で回すため、
+      属性とデータの対応が実行ごとにずれて落ちることがある (5.2 で修正)。このアドオンは
+      これらを使わないので、外した一時 GLB を読ませる。
+    - import_select_created_objects は 4.3 以降にしか無い。
+    """
+    gltf_path, tmp_path = path, None
+    if bpy.app.version < (5, 2, 0):
+        if model is None:
+            model = load_model(path)
+        data = glb_reader.glb_without_custom_attributes(model.json, model.bin)
+        if data is not None:
+            fd, tmp_path = tempfile.mkstemp(suffix=".glb", prefix="mmd2gltf_")
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            gltf_path = tmp_path
+    kw = {}
+    if "import_select_created_objects" in bpy.ops.import_scene.gltf.get_rna_type().properties:
+        kw["import_select_created_objects"] = True
+    try:
+        return bpy.ops.import_scene.gltf(filepath=gltf_path, bone_heuristic=bone_heuristic, **kw)
+    finally:
+        if tmp_path is not None:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def find_target_armature(context):
@@ -234,8 +266,7 @@ class MMD2GLTF_OT_import(bpy.types.Operator, ImportHelper):
             rep("WARNING", w)
         before = set(bpy.data.objects)
         try:
-            bpy.ops.import_scene.gltf(filepath=path, bone_heuristic=self.bone_heuristic,
-                                      import_select_created_objects=True)
+            import_gltf(path, self.bone_heuristic, model)
         except Exception as e:  # noqa: BLE001
             self.report({"ERROR"}, f"glTF インポートに失敗: {e}")
             return {"CANCELLED"}

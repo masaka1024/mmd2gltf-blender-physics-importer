@@ -253,6 +253,34 @@ def parse_glb_bytes(data):
     return js, b""
 
 
+def glb_without_custom_attributes(js, bin_):
+    """プリミティブから "_" で始まるカスタム頂点属性 (_SDEF_C, _EDGESCALE など) を外した GLB のバイト列。
+
+    Blender 4.2〜5.1 の glTF インポーターはカスタム属性を set の順で回すため、属性とデータの対応が
+    実行ごとにずれ、要素数の違う属性があると読み込みが落ちる (5.2 で修正)。このアドオンはこれらの
+    属性を使わないので、古い版では外して読ませる。外すものが無い・埋め込み BIN が無いときは None。
+    """
+    if not bin_:
+        return None
+    js = json.loads(json.dumps(js))
+    removed = False
+    for mesh in js.get("meshes") or []:
+        for prim in mesh.get("primitives") or []:
+            attrs = prim.get("attributes") or {}
+            for k in [k for k in attrs if k.startswith("_")]:
+                del attrs[k]
+                removed = True
+    if not removed:
+        return None
+    jb = json.dumps(js, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    jb += b" " * (-len(jb) % 4)
+    bb = bin_ + b"\0" * (-len(bin_) % 4)
+    total = 12 + 8 + len(jb) + 8 + len(bb)
+    return b"".join((struct.pack("<III", GLB_MAGIC, 2, total),
+                     struct.pack("<II", len(jb), CHUNK_JSON), jb,
+                     struct.pack("<II", len(bb), CHUNK_BIN), bb))
+
+
 def load(path):
     with open(path, "rb") as f:
         data = f.read()
