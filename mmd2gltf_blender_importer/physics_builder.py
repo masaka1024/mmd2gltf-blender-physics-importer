@@ -154,8 +154,16 @@ def _rb_add(obj):
 
 
 def _rbc_add(obj):
-    with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
-        bpy.ops.rigidbody.constraint_add()
+    # 4.2 の constraint_add は override の active_object ではなくビューレイヤーのアクティブに付ける
+    # (しかも FINISHED を返す) ので、ビューレイヤーのアクティブも一時的に切り替える。
+    vl_objs = bpy.context.view_layer.objects
+    prev = vl_objs.active
+    vl_objs.active = obj
+    try:
+        with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
+            bpy.ops.rigidbody.constraint_add()
+    finally:
+        vl_objs.active = prev
     return obj.rigid_body_constraint
 
 
