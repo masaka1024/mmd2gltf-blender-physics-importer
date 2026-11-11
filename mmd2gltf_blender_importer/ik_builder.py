@@ -22,6 +22,10 @@
 #   ポールターゲットも試したが、レガシー/iTaSC とも大腿が 180° 捻れる解に落ちるため使わない。
 #   検証 (Tda 式・左足): 上 25cm / 前 15cm+上 25cm / 後 15cm+上 25cm / 前 30cm の各目標で
 #   足首誤差 1〜4cm・膝は前へ屈曲。
+#
+# アニメ付き GLB: mmd2gltf は VMD を IK 解決済みの FK アニメとして焼き込み、IK ボーンにはキーを
+#   持たない。その鎖に IK を組むと、動かない IK ボーンへ足が引っ張られてねじれ、初期屈曲の回転
+#   モード変更でアニメの回転まで効かなくなる。鎖のボーンにアニメのキーがある IK は組まない。
 # ===========================================================================
 import math
 
@@ -40,9 +44,12 @@ def remove_existing(arm):
             if c.name.startswith(CONSTRAINT_NAME):
                 pb.constraints.remove(c)
                 n += 1
-        if pb.get("mmd2gltf_ik_prebend"):
+        prev_mode = pb.get("mmd2gltf_ik_prebend")
+        if prev_mode:
             pb.rotation_euler = (0.0, 0.0, 0.0)
             pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            # 初期屈曲で XYZ にした回転モードを戻す (古い版は True だけを記録していた)
+            pb.rotation_mode = prev_mode if isinstance(prev_mode, str) else "QUATERNION"
             del pb["mmd2gltf_ik_prebend"]
         pb.use_ik_limit_x = pb.use_ik_limit_y = pb.use_ik_limit_z = False
         pb.lock_ik_x = pb.lock_ik_y = pb.lock_ik_z = False
@@ -52,12 +59,26 @@ def remove_existing(arm):
     return n
 
 
+def animated_bones(arm):
+    """アクティブなアクションでキーを持つポーズボーン名の集合。"""
+    from .selfphys_bake import action_fcurves
+    ad = arm.animation_data
+    out = set()
+    for fc in action_fcurves(ad.action if ad else None, arm):
+        dp = fc.data_path
+        if dp.startswith('pose.bones["'):
+            out.add(dp[len('pose.bones["'):dp.index('"]')])
+    return out
+
+
 def build(context, arm, model, apply_limits=True, report=None, prebend_deg=10.0):
     from .physics_builder import find_bone
     log = report or (lambda *a, **k: None)
     scale = model.unit_scale
     remove_existing(arm)
     n_ik = 0
+    skipped_animated = []
+    animated = animated_bones(arm)
     mw = arm.matrix_world
     for b in model.bones:
         ik = b.ik
@@ -70,6 +91,10 @@ def build(context, arm, model, apply_limits=True, report=None, prebend_deg=10.0)
         end_bone = find_bone(arm, model, int(links[0]["bone"]), scale)
         if ik_bone is None or end_bone is None:
             log("WARNING", f"IK '{b.name}': ボーンが見つからずスキップ")
+            continue
+        chain = [find_bone(arm, model, int(lk["bone"]), scale) for lk in links]
+        if any(cb is not None and cb.name in animated for cb in chain):
+            skipped_animated.append(b.name)
             continue
         pb = arm.pose.bones[end_bone.name]
         c = pb.constraints.new("IK")
@@ -124,6 +149,8 @@ def build(context, arm, model, apply_limits=True, report=None, prebend_deg=10.0)
                     setattr(lpb, f"lock_ik_{other}", True)
             # 初期屈曲: 制限範囲の内側へ prebend_deg だけ倒しておく
             if prebend_deg > 0.0:
+                if not lpb.get("mmd2gltf_ik_prebend"):
+                    lpb["mmd2gltf_ik_prebend"] = lpb.rotation_mode
                 lpb.rotation_mode = "XYZ"
                 eul = [0.0, 0.0, 0.0]
                 for ax, (blo, bhi) in limited.items():
@@ -132,5 +159,7 @@ def build(context, arm, model, apply_limits=True, report=None, prebend_deg=10.0)
                     elif bhi <= 0.0 + 1e-6:
                         eul["xyz".index(ax)] = -math.radians(prebend_deg)
                 lpb.rotation_euler = eul
-                lpb["mmd2gltf_ik_prebend"] = True
+    if skipped_animated:
+        log("WARNING", f"アニメに IK 解決済みの回転が入っているため、IK {len(skipped_animated)} 件を組みませんでした"
+                       f" ({', '.join(skipped_animated)})。")
     return n_ik

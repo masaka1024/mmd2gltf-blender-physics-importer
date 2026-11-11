@@ -115,6 +115,10 @@ Rebuilds Blender IK constraints from `nodes[i].extras.mmd.ik`, with approximate 
 (knees) get a small pre-bend (10° by default) in the pose so the solver does not get stuck trying to hyperextend
 a perfectly straight leg (the same problem MMD solves with its knee special case).
 
+For an animated GLB, IK chains whose bones (leg, knee, ankle, ...) carry keys are not built. mmd2gltf bakes the VMD
+as IK-solved rotations and leaves the IK bones themselves unkeyed, so an IK constraint would pull the leg toward a
+motionless IK bone and twist it (skipped IKs are reported as a warning). IK is meant for posing models without animation.
+
 ## Requirements
 
 - Blender 4.2 or later (developed on 5.2 LTS; install-from-zip, import and bake verified on macOS arm64 with 4.2.23 LTS / 5.1.2 / 5.2.1) with the bundled glTF importer enabled
